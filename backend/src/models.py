@@ -1,0 +1,62 @@
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
+
+
+@dataclass
+class JobDescription:
+    title: str
+    department: str
+    location: str
+    experience_years: int
+    required_skills: list[str]
+    nice_to_have_skills: list[str]
+    education: str
+    description: str
+    threshold: int = 80
+
+
+@dataclass
+class ParsedResume:
+    file_name: str
+    full_name: str
+    email: str
+    phone: str
+    skills: list[str]
+    experience_years: int
+    education: str
+    linkedin: str = ""
+    github: str = ""
+    raw_text: str = ""
+    uploaded_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass
+class ResumeScore:
+    total_score: int
+    recommendation: str
+    matched_skills: list[str]
+    missing_skills: list[str]
+    breakdown: dict[str, int]
+    summary: str
+
+
+@dataclass
+class CandidateResult:
+    candidate: ParsedResume
+    score: ResumeScore
+    status: str
+
+    def to_row(self) -> dict[str, Any]:
+        return {
+            "Name": self.candidate.full_name,
+            "Email": self.candidate.email,
+            "Phone": self.candidate.phone,
+            "Experience": f"{self.candidate.experience_years} yrs",
+            "Skills": ", ".join(self.candidate.skills[:8]),
+            "Score": self.score.total_score,
+            "Status": self.status,
+            "Matched": ", ".join(self.score.matched_skills),
+            "Missing": ", ".join(self.score.missing_skills),
+            "Summary": self.score.summary,
+        }
