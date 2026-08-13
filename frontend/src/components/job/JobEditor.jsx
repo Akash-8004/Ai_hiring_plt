@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Loader2, Sparkles } from "lucide-react";
-import { Field } from "./common/Field";
+import { Field } from "../common/Field";
 
 function splitCsv(value) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);

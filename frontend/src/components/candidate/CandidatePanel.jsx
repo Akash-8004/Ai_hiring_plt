@@ -1,7 +1,7 @@
 import React from "react";
 import { XCircle } from "lucide-react";
-import { StatusBadge } from "./common/StatusBadge";
-import { CopyButton } from "./common/CopyButton";
+import { StatusBadge } from "../common/StatusBadge";
+import { CopyButton } from "../common/CopyButton";
 
 export function CandidatePanel({ candidate, onClose }) {
   const invitation = candidate.invitation;
@@ -102,6 +102,21 @@ export function CandidatePanel({ candidate, onClose }) {
           </div>
         ) : null}
       </section>
+
+      {/* Interview Transcript */}
+      {candidate.interview_transcript?.length ? (
+        <section>
+          <h3>Interview Transcript</h3>
+          <div className="transcript-box">
+            {candidate.interview_transcript.map((turn, index) => (
+              <p key={index} className={turn.role === "candidate" ? "transcript-candidate" : ""}>
+                <strong>{turn.role === "candidate" ? "Candidate:" : "AI Interviewer:"}</strong>{" "}
+                {turn.content}
+              </p>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </aside>
   );
 }

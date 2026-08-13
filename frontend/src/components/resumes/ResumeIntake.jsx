@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { FileText, Loader2, Upload } from "lucide-react";
-import { Field } from "./common/Field";
+import { Field } from "../common/Field";
 
 export function ResumeIntake({ onManualResume, onUpload, saving }) {
   const [fileName, setFileName] = useState("candidate_resume.txt");

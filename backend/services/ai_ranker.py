@@ -3,16 +3,16 @@ import os
 import re
 import urllib.error
 import urllib.request
-from pathlib import Path
 
-from backend.src.models import JobDescription, ParsedResume, ResumeScore
+from backend.config import load_env
+from backend.core.models import JobDescription, ParsedResume, ResumeScore
 
 
 class AIRankingService:
     """Resume ranking service with Gemini-first screening and local fallback."""
 
     def __init__(self) -> None:
-        _load_dotenv()
+        load_env()
         self.provider = os.getenv("AI_PROVIDER", "local").strip().lower()
         self.api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         self.model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
@@ -161,18 +161,6 @@ class AIRankingService:
             f"{resume.full_name} needs review before shortlisting; gaps include "
             f"{', '.join(_display_skill(skill) for skill in missing[:3]) or 'core JD alignment'}."
         )
-
-
-def _load_dotenv() -> None:
-    for parent_idx in (1, 2):
-        env_path = Path(__file__).resolve().parents[parent_idx] / ".env"
-        if env_path.exists():
-            for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-                line = raw_line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def _gemini_screening_prompt(resume: ParsedResume, job: JobDescription) -> str:

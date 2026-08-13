@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 from typing import BinaryIO
 
-from backend.src.models import ParsedResume
+from backend.core.models import ParsedResume
 
 
 KNOWN_SKILLS = {

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
+  Bot,
   CheckCircle2,
   Clock,
   Info,
@@ -8,11 +9,12 @@ import {
   MicOff,
   Monitor,
   PhoneOff,
-  Send,
   UsersRound,
   Video,
+  Volume2,
   XCircle,
 } from "lucide-react";
+import { createLiveClient } from "./liveClient";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
@@ -21,113 +23,18 @@ export function InterviewApp({ token, interviewType }) {
   const [phase, setPhase] = useState("loading");
   const [error, setError] = useState("");
   const [messages, setMessages] = useState([]);
+  const [streaming, setStreaming] = useState(null);
   const [result, setResult] = useState(null);
 
-  const [inputText, setInputText] = useState("");
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [isAiSpeaking, setIsAiSpeaking] = useState(false);
   const [isMicActive, setIsMicActive] = useState(false);
+  const [isAudioStreaming, setIsAudioStreaming] = useState(false);
 
-  const recognitionRef = useRef(null);
+  const liveRef = useRef(null);
   const transcriptRef = useRef([]);
+  const streamingRef = useRef({ role: null, text: "" });
   const messagesEndRef = useRef(null);
-
-  // Initialize SpeechRecognition (STT)
-  useEffect(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      const rec = new SpeechRecognition();
-      rec.continuous = true;
-      rec.interimResults = true;
-      rec.lang = "en-US";
-
-      rec.onresult = (event) => {
-        let text = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          text += event.results[i][0].transcript;
-        }
-        if (text.trim()) {
-          setInputText(text);
-        }
-      };
-
-      rec.onerror = (err) => {
-        console.warn("SpeechRecognition notice:", err.error);
-      };
-
-      rec.onend = () => {
-        setIsMicActive(false);
-      };
-
-      recognitionRef.current = rec;
-    }
-  }, []);
-
-  function startMic() {
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.start();
-        setIsMicActive(true);
-      } catch (e) {
-        /* already active or permission error */
-      }
-    }
-  }
-
-  function stopMic() {
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-        setIsMicActive(false);
-      } catch (e) {
-        /* ignore */
-      }
-    }
-  }
-
-  function toggleMic() {
-    if (isMicActive) {
-      stopMic();
-    } else {
-      startMic();
-    }
-  }
-
-  // Text-To-Speech (TTS)
-  function speakAIResponse(text, onComplete) {
-    if (!("speechSynthesis" in window)) {
-      if (onComplete) onComplete();
-      return;
-    }
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-
-    const voices = window.speechSynthesis.getVoices();
-    const naturalVoice = voices.find(
-      (v) =>
-        v.lang.startsWith("en") &&
-        (v.name.includes("Google") ||
-          v.name.includes("Natural") ||
-          v.name.includes("Samantha") ||
-          v.name.includes("David"))
-    );
-    if (naturalVoice) utterance.voice = naturalVoice;
-
-    setIsAiSpeaking(true);
-
-    utterance.onend = () => {
-      setIsAiSpeaking(false);
-      if (onComplete) onComplete();
-    };
-    utterance.onerror = () => {
-      setIsAiSpeaking(false);
-      if (onComplete) onComplete();
-    };
-
-    window.speechSynthesis.speak(utterance);
-  }
 
   // Fetch session data
   useEffect(() => {
@@ -154,102 +61,79 @@ export function InterviewApp({ token, interviewType }) {
   // Auto scroll chat
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isAiThinking]);
+  }, [messages, streaming, isAiThinking]);
 
-  // Start Interview Action
-  async function startInterview() {
-    setPhase("live");
-    setError("");
-    setIsAiThinking(true);
+  function finalizeStreaming() {
+    if (streamingRef.current.text.trim()) {
+      const msg = {
+        role: streamingRef.current.role,
+        content: streamingRef.current.text.trim(),
+      };
+      setMessages((prev) => [...prev, msg]);
+      transcriptRef.current = [...transcriptRef.current, msg];
+    }
+    streamingRef.current = { role: null, text: "" };
+    setStreaming(null);
+  }
 
+  // ── Live voice interview (Gemini Live via backend relay) ─────────────────
+
+  async function startLive() {
+    setIsAudioStreaming(false);
+    const client = createLiveClient({
+      token,
+      onReady: () => setIsMicActive(true),
+      onAudioStreaming: () => setIsAudioStreaming(true),
+      onTranscript: (role, text) => {
+        if (!text) return;
+        if (streamingRef.current.role !== role) {
+          finalizeStreaming();
+          streamingRef.current = { role, text };
+        } else {
+          streamingRef.current.text += ` ${text}`;
+        }
+        setStreaming({ role, text: streamingRef.current.text });
+        if (role === "interviewer") setIsAiSpeaking(true);
+      },
+      onTurnComplete: () => {
+        setIsAiSpeaking(false);
+        finalizeStreaming();
+      },
+      onEvaluation: (data) => {
+        finalizeStreaming();
+        setResult(data);
+        setPhase("done");
+        client.close();
+      },
+      onError: (message) => setError(message),
+      onClosed: () => setIsMicActive(false),
+    });
+    liveRef.current = client;
     try {
-      // Request mic permission
-      try {
-        await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (e) {
-        console.warn("Microphone access prompt:", e);
-      }
-
-      // Call Backend LLM for Initial AI Greeting
-      const res = await fetch(`${API_BASE}/api/interview/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          token,
-          interview_type: interviewType,
-          transcript: [],
-          user_message: "",
-        }),
-      });
-
-      if (!res.ok) throw new Error("Could not connect to AI interviewer");
-
-      const data = await res.json();
-      const initialMsg = { role: "interviewer", content: data.content };
-      transcriptRef.current = [initialMsg];
-      setMessages([initialMsg]);
-      setIsAiThinking(false);
-
-      // Speak opening greeting out loud, then activate mic for candidate response!
-      speakAIResponse(data.content, () => {
-        startMic();
-      });
+      await client.connect();
     } catch (err) {
-      setError(err.message);
-      setIsAiThinking(false);
+      setError("Live audio is unavailable on this device.");
     }
   }
 
-  // Send candidate turn
-  async function sendCandidateTurn(textToSend) {
-    const text = (textToSend || inputText).trim();
-    if (!text || isAiThinking) return;
+  // ── Controls ─────────────────────────────────────────────────────────────
 
-    stopMic();
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-    }
-
-    const candidateMsg = { role: "candidate", content: text };
-    const updatedTranscript = [...transcriptRef.current, candidateMsg];
-    transcriptRef.current = updatedTranscript;
-    setMessages(updatedTranscript);
-    setInputText("");
-    setIsAiThinking(true);
-
-    try {
-      const res = await fetch(`${API_BASE}/api/interview/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          token,
-          interview_type: interviewType,
-          transcript: updatedTranscript,
-          user_message: text,
-        }),
-      });
-
-      if (!res.ok) throw new Error("Failed to get response from AI interviewer");
-
-      const data = await res.json();
-      const aiMsg = { role: "interviewer", content: data.content };
-      const finalTranscript = [...updatedTranscript, aiMsg];
-      transcriptRef.current = finalTranscript;
-      setMessages(finalTranscript);
-      setIsAiThinking(false);
-
-      // Speak AI response, then restart mic for candidate's next turn
-      speakAIResponse(data.content, () => {
-        startMic();
-      });
-    } catch (err) {
-      setError(err.message);
-      setIsAiThinking(false);
+  function toggleMic() {
+    const client = liveRef.current;
+    if (!client) return;
+    if (isMicActive) {
+      client.pause();
+      setIsMicActive(false);
+    } else {
+      client.resume();
+      setIsMicActive(true);
     }
   }
 
   async function endInterview() {
-    stopMic();
+    if (liveRef.current) {
+      await liveRef.current.close();
+    }
     if ("speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }
@@ -277,6 +161,12 @@ export function InterviewApp({ token, interviewType }) {
       setError(err.message);
       setPhase("done");
     }
+  }
+
+  async function startInterview() {
+    setPhase("live");
+    setError("");
+    await startLive();
   }
 
   const isTechnical = interviewType === "technical";
@@ -376,86 +266,94 @@ export function InterviewApp({ token, interviewType }) {
           </div>
         )}
 
-        {/* ─── Live Interview (STT -> LLM -> TTS) ─── */}
+        {/* ─── Live Interview (browser audio ↔ Gemini Live relay) ─── */}
         {(phase === "live" || phase === "evaluating") && (
           <div className="interview-live-container">
-            <div className="status-banner">
-              {isAiThinking ? (
-                <div className="banner-badge thinking">
-                  <Loader2 className="spin" size={16} />
-                  <span>AI Interviewer is thinking…</span>
-                </div>
-              ) : isAiSpeaking ? (
-                <div className="banner-badge speaking">
-                  <Mic size={16} />
-                  <span>AI Interviewer is speaking…</span>
-                </div>
-              ) : isMicActive ? (
-                <div className="banner-badge listening">
-                  <Mic size={16} />
-                  <span>Listening to your voice… (Speak now)</span>
-                </div>
-              ) : (
-                <div className="banner-badge ready">
-                  <MicOff size={16} />
-                  <span>Mic paused — click Mic icon or type to answer</span>
-                </div>
-              )}
-            </div>
-
-            <div className="interview-chat-messages">
-              {messages.map((message, index) => (
-                <div key={index} className={`chat-bubble ${message.role}`}>
-                  <strong>{message.role === "candidate" ? "You" : "AI Interviewer"}</strong>
-                  <p>{message.content}</p>
-                </div>
-              ))}
-              {isAiThinking && (
-                <div className="chat-bubble interviewer thinking-bubble">
-                  <strong>AI Interviewer</strong>
-                  <p><Loader2 className="spin" size={16} /> Generating response…</p>
-                </div>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
-
-            {phase === "live" && (
-              <form
-                className="chat-input-bar"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  sendCandidateTurn();
-                }}
-              >
-                <button
-                  type="button"
-                  className={`mic-toggle-btn ${isMicActive ? "active" : ""}`}
-                  onClick={toggleMic}
-                  title={isMicActive ? "Pause Mic" : "Start Mic Recording"}
+            <div className="live-grid">
+              {/* Left — AI avatar visual */}
+              <div className="ai-avatar-card">
+                <div
+                  className={`ai-avatar ${
+                    isAiSpeaking
+                      ? "speaking"
+                      : isAiThinking
+                        ? "thinking"
+                        : isMicActive
+                          ? "listening"
+                          : "idle"
+                  }`}
                 >
-                  {isMicActive ? <Mic size={20} /> : <MicOff size={20} />}
-                </button>
-                <input
-                  type="text"
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  placeholder={
-                    isMicActive
-                      ? "Listening to your voice… (or type here)"
-                      : "Type your answer or click mic to speak…"
-                  }
-                  disabled={isAiThinking}
-                />
-                <button
-                  type="submit"
-                  className="primary-button send-btn"
-                  disabled={!inputText.trim() || isAiThinking}
-                >
-                  <Send size={18} />
-                  <span>Send</span>
-                </button>
-              </form>
-            )}
+                  <span className="avatar-ring ring-1" />
+                  <span className="avatar-ring ring-2" />
+                  <span className="avatar-ring ring-3" />
+                  <div className="avatar-core">
+                    {isAiSpeaking ? (
+                      <Volume2 size={46} />
+                    ) : isAiThinking ? (
+                      <Loader2 className="spin" size={46} />
+                    ) : (
+                      <Bot size={46} />
+                    )}
+                  </div>
+                </div>
+
+                <div className="ai-avatar-status">
+                  <span
+                    className={`status-dot ${
+                      isAiSpeaking ? "speaking" : isAiThinking ? "thinking" : isMicActive ? "listening" : "idle"
+                    }`}
+                  />
+                  <span>
+                    {isAiSpeaking
+                      ? "AI Interviewer is speaking…"
+                      : isAiThinking
+                        ? "AI Interviewer is thinking…"
+                        : isMicActive
+                          ? isAudioStreaming
+                            ? "Listening — please speak now"
+                            : "Checking microphone… speak to confirm"
+                          : "Microphone paused"}
+                  </span>
+                </div>
+
+                <div className="avatar-mic-row">
+                  <button
+                    type="button"
+                    className={`mic-toggle-btn ${isMicActive ? "active" : ""}`}
+                    onClick={toggleMic}
+                    title={isMicActive ? "Pause Mic" : "Start Mic"}
+                  >
+                    {isMicActive ? <Mic size={22} /> : <MicOff size={22} />}
+                  </button>
+                  <span className="mic-toggle-hint">
+                    {isMicActive ? "Tap to mute" : "Tap to unmute"}
+                  </span>
+                </div>
+              </div>
+
+              {/* Right — live transcript */}
+              <div className="interview-transcript-panel">
+                <div className="transcript-panel-header">
+                  <h3>Live Transcript</h3>
+                  <span className="transcript-count">{messages.length} turns</span>
+                </div>
+                <div className="transcript-list">
+                  {messages.map((message, index) => (
+                    <div key={index} className={`chat-bubble ${message.role}`}>
+                      <strong>{message.role === "candidate" ? "You" : "AI Interviewer"}</strong>
+                      <p>{message.content}</p>
+                    </div>
+                  ))}
+                  {streaming ? (
+                    <div className={`chat-bubble ${streaming.role}`}>
+                      <strong>{streaming.role === "candidate" ? "You" : "AI Interviewer"}</strong>
+                      <p>{streaming.text}</p>
+                    </div>
+                  ) : null}
+                  <div ref={messagesEndRef} />
+                </div>
+              </div>
+            </div>
           </div>
         )}
 

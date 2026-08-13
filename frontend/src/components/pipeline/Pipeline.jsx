@@ -2,7 +2,7 @@ import React from "react";
 import { Loader2, Send } from "lucide-react";
 import { PipelineCandidateRow } from "./PipelineCandidateRow";
 
-export function Pipeline({ candidates, metrics, onInvite, busy }) {
+export function Pipeline({ candidates, onInvite, busy }) {
   const uploaded = candidates.length;
   const shortlisted = candidates.filter((c) => c.Status === "Shortlisted");
   const invited = candidates.filter((c) => c.invitation?.link);

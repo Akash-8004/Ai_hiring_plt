@@ -3,9 +3,9 @@ import os
 import re
 import urllib.error
 import urllib.request
-from pathlib import Path
 
-from backend.src.models import JobDescription, ParsedResume
+from backend.config import load_env
+from backend.core.models import JobDescription, ParsedResume
 
 HR_EVALUATION_PROMPT = """
 You are an expert HR interviewer evaluator with 10+ years of experience in talent assessment.
@@ -51,7 +51,7 @@ class InterviewAgent:
     """Gemini-powered AI interviewer prompts and transcript evaluation."""
 
     def __init__(self) -> None:
-        _load_dotenv()
+        load_env()
         self.api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         self.model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
         self.last_error = ""
@@ -154,18 +154,6 @@ TONE & STYLE:
             "red_flags": "None",
             "recommendation": "Review transcript manually.",
         }
-
-
-def _load_dotenv() -> None:
-    env_path = Path(__file__).resolve().parents[2] / ".env"
-    if not env_path.exists():
-        return
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def _format_transcript(transcript: list[dict]) -> str:

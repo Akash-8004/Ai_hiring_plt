@@ -1,27 +1,30 @@
+import array
+import asyncio
+import base64
 import json
-import os
+import math
 import secrets
-import urllib.request
+import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from backend.src.ai_ranker import AIRankingService
-from backend.src import database
-from backend.src.interview_agent import InterviewAgent
-from backend.src.models import JobDescription, ParsedResume
-from backend.src.resume_parser import parse_resume_text, parse_uploaded_resume
-from backend.src.sample_data import DEFAULT_JOB, SAMPLE_RESUMES
-from backend.src.storage import score_candidates
-
-from backend.technical_interview.evaluator import TechnicalInterviewEvaluator
-from backend.technical_interview.interviewer import generate_interviewer_turn, get_interviewer_prompt
+from backend.core.models import JobDescription, ParsedResume
+from backend.core.sample_data import DEFAULT_JOB, SAMPLE_RESUMES
+from backend.live.relay import GeminiLiveRelay
+from backend.services.ai_ranker import AIRankingService
+from backend.services.interview_agent import InterviewAgent
+from backend.services.interviewer import get_interviewer_prompt
+from backend.services.ranking import score_candidates
+from backend.services.resume_parser import parse_resume_text, parse_uploaded_resume
+from backend.services.technical_evaluator import TechnicalInterviewEvaluator
+from backend.storage import database
 
 
 app = FastAPI(title="AI Hiring Platform API", version="0.1.0")
@@ -62,13 +65,6 @@ class EvaluationPayload(BaseModel):
     token: str
     transcript: list[dict[str, str]] = Field(default_factory=list)
     interview_type: str = "hr"
-
-
-class ChatPayload(BaseModel):
-    token: str
-    transcript: list[dict[str, str]] = Field(default_factory=list)
-    user_message: str = ""
-    interview_type: str = "technical"
 
 
 @app.get("/api/health")
@@ -191,24 +187,6 @@ def interview_session(token: str) -> dict[str, Any]:
     }
 
 
-# ── Chat Turn Endpoint ──────────────────────────────────────────────────────
-
-@app.post("/api/interview/chat")
-def interview_chat(payload: ChatPayload) -> dict[str, Any]:
-    email = _email_for_token(payload.token)
-    if not email:
-        raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
-    resume = next((c for c in candidate_resumes if c.email == email), None)
-    if not resume:
-        raise HTTPException(status_code=404, detail="Candidate not found.")
-
-    interview_type = payload.interview_type
-    system_prompt = get_interviewer_prompt(interview_type, current_job, resume)
-
-    content = generate_interviewer_turn(system_prompt, payload.transcript, payload.user_message)
-    return {"role": "interviewer", "content": content}
-
-
 # ── Evaluation ──────────────────────────────────────────────────────────────
 
 @app.post("/api/interview/evaluate")
@@ -219,37 +197,238 @@ def evaluate_interview(payload: EvaluationPayload) -> dict[str, Any]:
     resume = next((c for c in candidate_resumes if c.email == email), None)
     if not resume:
         raise HTTPException(status_code=404, detail="Candidate not found.")
+    return _run_interview_evaluation(email, resume, payload.interview_type, payload.transcript)
 
-    interview_type = payload.interview_type
 
-    # Use appropriate evaluator
-    if interview_type == "technical":
-        result = technical_evaluator.evaluate(resume.raw_text, payload.transcript)
-        result.setdefault("provider_used", "gemini" if technical_evaluator.api_key else "local")
-        if technical_evaluator.last_error:
-            result["provider_error"] = technical_evaluator.last_error
+# ── Live Voice Interview (WebSocket relay) ─────────────────────────────────
+
+CLOSING_PHRASES = (
+    "interview is now complete",
+    "interview is complete",
+    "interview is now finished",
+    "this concludes the interview",
+)
+
+# Gemini's Live API uses automatic voice-activity detection (VAD) by default.
+# The browser streams mic PCM continuously and the server forwards it to Gemini,
+# which detects the candidate's speech. Gemini does NOT finalize a turn on silence
+# alone here, so once the candidate stops talking we send `audio_stream_end` to
+# flush the buffered audio (the documented "hybrid VAD" pattern) and trigger the
+# model's reply. Manual activity_start/activity_end windowing was fragile and
+# crashed with "1007 Precondition check failed".
+SPEECH_THRESHOLD = 0.008  # normalised RMS above which we treat audio as speech
+SILENCE_FLUSH = 1.0  # seconds of low-energy audio before finalizing the turn
+
+
+def _pcm_rms(data: bytes) -> float:
+    """Normalised RMS of 16-bit little-endian PCM (0.0..1.0)."""
+    if not data or len(data) % 2 != 0:
+        return 0.0
+    samples = array.array("h")
+    samples.frombytes(data)
+    if not samples:
+        return 0.0
+    total = 0.0
+    for sample in samples:
+        total += sample * sample
+    return math.sqrt(total / len(samples)) / 32768.0
+
+
+def _interview_is_complete(transcript: list[dict]) -> bool:
+    """Detect the interviewer's closing phrase to trigger auto-evaluation."""
+    for message in reversed(transcript):
+        if message.get("role") == "interviewer":
+            text = str(message.get("content", "") or "").lower()
+            return any(phrase in text for phrase in CLOSING_PHRASES)
+    return False
+
+
+@app.websocket("/ws/interview/{token}")
+async def interview_live_ws(websocket: WebSocket, token: str) -> None:
+    await websocket.accept()
+
+    email = _email_for_token(token)
+    resume = next((c for c in candidate_resumes if c.email == email), None) if email else None
+    if not email or not resume:
+        await websocket.send_json({"type": "error", "message": "Invitation not found or invalid."})
+        await websocket.close()
+        return
+
+    doc = database.get_candidate_doc(email) or {}
+    invitation = doc.get("invitation") or {}
+    hr_invitation = doc.get("hr_invitation") or {}
+    if invitation.get("token") == token:
+        interview_type = invitation.get("type", "technical")
+    elif hr_invitation.get("token") == token:
+        interview_type = "hr"
     else:
-        result = interview_agent.evaluate_interview(resume.raw_text, payload.transcript)
-        result.setdefault("provider_used", "gemini" if interview_agent.api_key else "local")
-        if interview_agent.last_error:
-            result["provider_error"] = interview_agent.last_error
+        interview_type = "technical"
 
-    interview = {
-        "status": "completed",
-        "type": interview_type,
-        "decision": result.get("decision", "FAIL"),
-        "score": result.get("final_round_score", 0),
-        "completed_at": datetime.now(timezone.utc).isoformat(),
-        "evaluation": result,
-    }
+    system_prompt = get_interviewer_prompt(interview_type, current_job, resume)
+    relay = GeminiLiveRelay(system_prompt=system_prompt)
 
-    # Store in the right field
-    if interview_type == "technical":
-        database.set_candidate_technical_interview(email, interview)
-    else:
-        database.set_candidate_hr_interview(email, interview)
+    if not relay.available:
+        await websocket.send_json(
+            {"type": "error", "message": "Gemini Live is not configured (GEMINI_API_KEY missing)."}
+        )
+        await websocket.close()
+        return
 
-    return {"email": email, "interview_type": interview_type, **result}
+    transcript: list[dict] = []
+    user_buffer: list[str] = []
+    model_buffer: list[str] = []
+
+    def flush_user_turn() -> None:
+        text = " ".join(user_buffer).strip()
+        if text:
+            transcript.append({"role": "candidate", "content": text})
+            database.append_transcript_turn(email, "candidate", text)
+        user_buffer.clear()
+
+    def flush_model_turn() -> None:
+        text = " ".join(model_buffer).strip()
+        if text:
+            transcript.append({"role": "interviewer", "content": text})
+            database.append_transcript_turn(email, "interviewer", text)
+        model_buffer.clear()
+
+    async def send_ws(payload: dict) -> None:
+        try:
+            await websocket.send_json(payload)
+        except Exception:
+            pass
+
+    async def client_loop(to_gemini: asyncio.Queue, done: asyncio.Event) -> None:
+        try:
+            while not done.is_set():
+                raw = await websocket.receive_text()
+                msg = json.loads(raw)
+                mtype = msg.get("type")
+                print(
+                    f"WS<- {mtype}"
+                    + (f" len={len(msg.get('data') or '')}" if mtype == "audio" else ""),
+                    flush=True,
+                )
+                if mtype == "audio":
+                    data = base64.b64decode(msg.get("data") or "")
+                    await to_gemini.put(("audio", data))
+                elif mtype == "end":
+                    done.set()
+        except (WebSocketDisconnect, RuntimeError):
+            done.set()
+
+    async def send_loop(session, to_gemini: asyncio.Queue, done: asyncio.Event, state: dict) -> None:
+        last_speech = 0.0
+        try:
+            while not done.is_set():
+                try:
+                    kind, payload = await asyncio.wait_for(to_gemini.get(), timeout=0.05)
+                except asyncio.TimeoutError:
+                    now = time.monotonic()
+                    if last_speech and not state["model_active"] and now - last_speech > SILENCE_FLUSH:
+                        await relay.audio_stream_end(session)
+                        last_speech = 0.0
+                        print("WS! flushed (silence timeout)", flush=True)
+                    continue
+                now = time.monotonic()
+                if kind == "audio":
+                    if not state["model_active"]:
+                        # Stream everything to Gemini; its automatic VAD detects the
+                        # speech. When the candidate falls silent long enough we send
+                        # audio_stream_end so Gemini finalizes the turn and replies.
+                        if _pcm_rms(payload) >= SPEECH_THRESHOLD:
+                            last_speech = now
+                        elif last_speech and now - last_speech > SILENCE_FLUSH:
+                            await relay.audio_stream_end(session)
+                            last_speech = 0.0
+                            print("WS! flushed (silence)", flush=True)
+                        await relay.send_audio(session, payload)
+                    # else: model is speaking; drop the mic feed so its own voice
+                    # cannot make it barge itself in (echo).
+        except Exception:
+            import traceback
+
+            traceback.print_exc()
+            await send_ws({"type": "error", "message": "Live session failed."})
+            done.set()
+
+    async def receive_loop(session, done: asyncio.Event, state: dict) -> None:
+        try:
+            state["model_active"] = True
+            await relay.begin_interview(session)
+            model_turn_started = False
+            while not done.is_set():
+                async for message in session.receive():
+                    sc = message.server_content
+                    if not sc:
+                        continue
+                    if getattr(sc, "interrupted", False):
+                        await send_ws({"type": "interrupt"})
+                    if sc.model_turn:
+                        if not model_turn_started:
+                            model_turn_started = True
+                            state["model_active"] = True
+                            await send_ws({"type": "model_turn_start"})
+                        for part in sc.model_turn.parts:
+                            if part.inline_data and part.inline_data.data:
+                                encoded = base64.b64encode(part.inline_data.data).decode("ascii")
+                                await send_ws({"type": "audio", "data": encoded})
+                    if sc.input_transcription and sc.input_transcription.text:
+                        user_buffer.append(sc.input_transcription.text.strip())
+                        await send_ws({"type": "transcript", "role": "candidate", "text": sc.input_transcription.text.strip()})
+                    if sc.output_transcription and sc.output_transcription.text:
+                        model_buffer.append(sc.output_transcription.text.strip())
+                        await send_ws({"type": "transcript", "role": "interviewer", "text": sc.output_transcription.text.strip()})
+                    if sc.turn_complete:
+                        state["model_active"] = False
+                        break
+                flush_user_turn()
+                flush_model_turn()
+                model_turn_started = False
+                await send_ws({"type": "turn_complete"})
+                if _interview_is_complete(transcript):
+                    result = await asyncio.to_thread(
+                        _run_interview_evaluation, email, resume, interview_type, list(transcript)
+                    )
+                    await send_ws({"type": "evaluation", "result": result})
+                    done.set()
+                    try:
+                        await websocket.close(code=1000)
+                    except Exception:
+                        pass
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            await send_ws({"type": "error", "message": str(exc)})
+            done.set()
+
+    try:
+        async with relay.connect() as session:
+            to_gemini: asyncio.Queue = asyncio.Queue()
+            done: asyncio.Event = asyncio.Event()
+            await send_ws({"type": "ready"})
+            state: dict = {"model_active": False}
+            tasks = [
+                asyncio.create_task(client_loop(to_gemini, done)),
+                asyncio.create_task(send_loop(session, to_gemini, done, state)),
+                asyncio.create_task(receive_loop(session, done, state)),
+            ]
+            try:
+                await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED)
+            finally:
+                for task in tasks:
+                    task.cancel()
+    except Exception as exc:
+        await send_ws({"type": "error", "message": str(exc)})
+    finally:
+        await send_ws({"type": "closed"})
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # ── Workspace Payload ───────────────────────────────────────────────────────
@@ -277,6 +456,7 @@ def _workspace_payload() -> dict[str, Any]:
         row["interview"] = doc.get("interview")
         row["technical_interview"] = doc.get("technical_interview")
         row["hr_interview"] = doc.get("hr_interview")
+        row["interview_transcript"] = doc.get("interview_transcript") or []
 
         stage = row["pipelineStage"]
         if stage in {"invited", "tech_passed", "tech_failed", "hr_failed", "hired"}:
@@ -324,6 +504,38 @@ def _workspace_payload() -> dict[str, Any]:
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+def _run_interview_evaluation(
+    email: str, resume: ParsedResume, interview_type: str, transcript: list[dict]
+) -> dict[str, Any]:
+    """Score an interview transcript and persist the result + pipeline stage."""
+    if interview_type == "technical":
+        result = technical_evaluator.evaluate(resume.raw_text, transcript)
+        result.setdefault("provider_used", "gemini" if technical_evaluator.api_key else "local")
+        if technical_evaluator.last_error:
+            result["provider_error"] = technical_evaluator.last_error
+    else:
+        result = interview_agent.evaluate_interview(resume.raw_text, transcript)
+        result.setdefault("provider_used", "gemini" if interview_agent.api_key else "local")
+        if interview_agent.last_error:
+            result["provider_error"] = interview_agent.last_error
+
+    interview = {
+        "status": "completed",
+        "type": interview_type,
+        "decision": str(result.get("decision", "FAIL")).upper(),
+        "score": result.get("final_round_score", 0),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "evaluation": result,
+    }
+
+    if interview_type == "technical":
+        database.set_candidate_technical_interview(email, interview)
+    else:
+        database.set_candidate_hr_interview(email, interview)
+
+    return {"email": email, "interview_type": interview_type, **result}
+
 
 def _email_for_token(token: str) -> str | None:
     if not token:

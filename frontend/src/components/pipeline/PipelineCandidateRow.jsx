@@ -1,6 +1,6 @@
 import React from "react";
 import { CheckCircle2, Send, XCircle } from "lucide-react";
-import { CopyButton } from "./common/CopyButton";
+import { CopyButton } from "../common/CopyButton";
 
 export function PipelineCandidateRow({ candidate, onInvite, busy }) {
   const invitation = candidate.invitation;

@@ -10,7 +10,7 @@ import {
   UserRoundCheck,
   XCircle,
 } from "lucide-react";
-import { Metric } from "./common/Metric";
+import { Metric } from "../common/Metric";
 import { CandidateTable } from "./CandidateTable";
 
 export function Dashboard({

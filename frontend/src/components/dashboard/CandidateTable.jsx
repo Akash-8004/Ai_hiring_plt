@@ -1,6 +1,6 @@
 import React from "react";
 import { ChevronRight, FileText } from "lucide-react";
-import { StatusBadge } from "./common/StatusBadge";
+import { StatusBadge } from "../common/StatusBadge";
 
 export function CandidateTable({ candidates, onCandidate }) {
   if (!candidates.length) {

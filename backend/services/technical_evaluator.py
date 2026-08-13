@@ -9,16 +9,16 @@ import os
 import re
 import urllib.error
 import urllib.request
-from pathlib import Path
 
-from backend.technical_interview.prompts import TECHNICAL_EVALUATION_PROMPT
+from backend.config import load_env
+from backend.services.prompts import TECHNICAL_EVALUATION_PROMPT
 
 
 class TechnicalInterviewEvaluator:
     """Evaluate a technical interview transcript using Gemini."""
 
     def __init__(self) -> None:
-        _load_dotenv()
+        load_env()
         self.api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         self.model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
         self.last_error = ""
@@ -105,18 +105,6 @@ class TechnicalInterviewEvaluator:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _load_dotenv() -> None:
-    env_path = Path(__file__).resolve().parents[2] / ".env"
-    if not env_path.exists():
-        return
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
 
 def _format_transcript(transcript: list[dict]) -> str:
     lines = []

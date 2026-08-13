@@ -1,4 +1,4 @@
-from backend.src.models import JobDescription
+from backend.core.models import JobDescription
 
 
 DEFAULT_JOB = JobDescription(

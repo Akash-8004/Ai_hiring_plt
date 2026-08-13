@@ -2,16 +2,16 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
-import { Sidebar } from "./components/Sidebar";
-import { Topbar } from "./components/Topbar";
-import { Dashboard } from "./components/Dashboard";
-import { JobEditor } from "./components/JobEditor";
-import { ResumeIntake } from "./components/ResumeIntake";
-import { Pipeline } from "./components/Pipeline";
-import { CandidatePanel } from "./components/CandidatePanel";
-import { SettingsView } from "./components/SettingsView";
+import { Sidebar } from "./components/layout/Sidebar";
+import { Topbar } from "./components/layout/Topbar";
+import { Dashboard } from "./components/dashboard/Dashboard";
+import { JobEditor } from "./components/job/JobEditor";
+import { ResumeIntake } from "./components/resumes/ResumeIntake";
+import { Pipeline } from "./components/pipeline/Pipeline";
+import { CandidatePanel } from "./components/candidate/CandidatePanel";
+import { SettingsView } from "./components/settings/SettingsView";
 import { LoadingScreen } from "./components/common/LoadingScreen";
-import { InterviewApp } from "./components/InterviewApp";
+import { InterviewApp } from "./components/interview/InterviewApp";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
@@ -182,7 +182,6 @@ function App() {
         {activeView === "pipeline" && (
           <Pipeline
             candidates={workspace.candidates}
-            metrics={workspace.metrics}
             onInvite={inviteCandidate}
             busy={saving}
           />

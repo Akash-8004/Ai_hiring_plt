@@ -1,5 +1,5 @@
-from backend.src.ai_ranker import AIRankingService
-from backend.src.models import CandidateResult, JobDescription, ParsedResume
+from backend.core.models import CandidateResult, JobDescription, ParsedResume
+from backend.services.ai_ranker import AIRankingService
 
 
 def score_candidates(

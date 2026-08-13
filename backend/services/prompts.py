@@ -3,7 +3,7 @@ Technical interview prompts for
 the AI_Hiring Gemini Live integration.
 """
 
-from backend.src.models import JobDescription, ParsedResume
+from backend.core.models import JobDescription, ParsedResume
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ INTERVIEW STRUCTURE (15-20 minutes total):
 6. CLOSING (1-2 mins)
    - "Do you have any questions about the engineering team or the role?"
    - Thank the candidate warmly
-   - "Thank you for joining. You can leave the interview now."
+   - End the interview by saying EXACTLY: "The interview is now complete. Thank you for joining." followed by your name. Do not add any further questions after this.
 
 TONE & STYLE:
 - Friendly and supportive, not intimidating
@@ -164,6 +164,11 @@ TONE & STYLE:
 - If doing well: Challenge them further
 - One question at a time, clear transitions
 - Be conversational — this is a voice interview, keep answers natural and concise
+
+TIMING (CRITICAL):
+- The session must wrap up around the 8-minute mark of the conversation.
+- Around 7 minutes, move to the closing section.
+- Once you say "The interview is now complete.", do not ask anything else.
 
 IMPORTANT RULES:
 - Do not answer technical questions for the candidate

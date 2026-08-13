@@ -1,25 +1,13 @@
 import os
 from datetime import datetime
-from pathlib import Path
 
 from pymongo import MongoClient
 
-from backend.src.models import JobDescription, ParsedResume
+from backend.config import load_env
+from backend.core.models import JobDescription, ParsedResume
 
 
-def _load_dotenv() -> None:
-    for parent_idx in (1, 2):
-        env_path = Path(__file__).resolve().parents[parent_idx] / ".env"
-        if env_path.exists():
-            for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-                line = raw_line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-_load_dotenv()
+load_env()
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 _db = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2000)["ai_hiring"]
@@ -112,13 +100,6 @@ def get_candidate_doc(email: str) -> dict | None:
     return doc
 
 
-def set_candidate_stage(email: str, stage: str) -> None:
-    _candidates.update_one(
-        {"email": email},
-        {"$set": {"pipelineStage": stage, "updated_at": datetime.utcnow()}},
-    )
-
-
 def set_candidate_invitation(email: str, invitation: dict) -> None:
     _candidates.update_one(
         {"email": email},
@@ -130,13 +111,6 @@ def set_candidate_hr_invitation(email: str, invitation: dict) -> None:
     _candidates.update_one(
         {"email": email},
         {"$set": {"hr_invitation": invitation}},
-    )
-
-
-def set_candidate_interview(email: str, interview: dict) -> None:
-    _candidates.update_one(
-        {"email": email},
-        {"$set": {"interview": interview, "pipelineStage": "interviewed"}},
     )
 
 
@@ -153,4 +127,23 @@ def set_candidate_hr_interview(email: str, interview: dict) -> None:
     _candidates.update_one(
         {"email": email},
         {"$set": {"hr_interview": interview, "pipelineStage": stage}},
+    )
+
+
+def append_transcript_turn(email: str, role: str, text: str) -> None:
+    """Persist one interview turn as it happens so a closed tab never loses it."""
+    content = (text or "").strip()
+    if not content:
+        return
+    _candidates.update_one(
+        {"email": email},
+        {
+            "$push": {
+                "interview_transcript": {
+                    "role": role,
+                    "content": content,
+                    "at": datetime.utcnow().isoformat(),
+                }
+            }
+        },
     )
