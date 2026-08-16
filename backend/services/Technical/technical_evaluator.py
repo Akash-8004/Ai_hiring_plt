@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 from backend.config import load_env
-from backend.services.prompts import TECHNICAL_EVALUATION_PROMPT
+from backend.services.Technical.prompts import TECHNICAL_EVALUATION_PROMPT
 
 
 class TechnicalInterviewEvaluator:

@@ -20,10 +20,10 @@ from backend.core.sample_data import DEFAULT_JOB, SAMPLE_RESUMES
 from backend.live.relay import GeminiLiveRelay
 from backend.services.ai_ranker import AIRankingService
 from backend.services.interview_agent import InterviewAgent
-from backend.services.interviewer import get_interviewer_prompt
+from backend.services.Technical.interviewer import get_interviewer_prompt
 from backend.services.ranking import score_candidates
 from backend.services.resume_parser import parse_resume_text, parse_uploaded_resume
-from backend.services.technical_evaluator import TechnicalInterviewEvaluator
+from backend.services.Technical.technical_evaluator import TechnicalInterviewEvaluator
 from backend.storage import database
 
 

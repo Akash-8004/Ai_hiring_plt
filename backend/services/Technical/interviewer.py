@@ -1,6 +1,6 @@
 from backend.core.models import JobDescription, ParsedResume
 from backend.services.interview_agent import InterviewAgent
-from backend.services.prompts import build_technical_interviewer_prompt
+from backend.services.Technical.prompts import build_technical_interviewer_prompt
 
 interview_agent = InterviewAgent()
 
