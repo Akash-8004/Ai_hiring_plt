@@ -1,9 +1,15 @@
 import React, { useState } from "react";
-import { Loader2, Sparkles } from "lucide-react";
+import { Loader2, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { Field } from "../common/Field";
+
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 function splitCsv(value) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function blankQuestion() {
+  return { question: "", topic: "General", difficulty: "medium", expected_points: [] };
 }
 
 export function JobEditor({ job, onSave, saving }) {
@@ -12,6 +18,10 @@ export function JobEditor({ job, onSave, saving }) {
     required_skills: job.required_skills.join(", "),
     nice_to_have_skills: job.nice_to_have_skills.join(", "),
   });
+  const [questions, setQuestions] = useState(job.custom_questions || []);
+  const [manualText, setManualText] = useState("");
+  const [processing, setProcessing] = useState(false);
+  const [processingError, setProcessingError] = useState("");
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -25,7 +35,70 @@ export function JobEditor({ job, onSave, saving }) {
       threshold: Number(form.threshold),
       required_skills: splitCsv(form.required_skills),
       nice_to_have_skills: splitCsv(form.nice_to_have_skills),
+      custom_questions: questions
+        .map((q) => ({ ...q, question: q.question.trim() }))
+        .filter((q) => q.question),
     });
+  }
+
+  async function processManualText() {
+    if (!manualText.trim()) return;
+    setProcessing(true);
+    setProcessingError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/job/questions/process-text`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: manualText }),
+      });
+      if (!response.ok) throw new Error("Could not process questions");
+      const data = await response.json();
+      if (data.message) setProcessingError(data.message);
+      setQuestions(data.questions);
+      setManualText("");
+    } catch (err) {
+      setProcessingError(err.message);
+    } finally {
+      setProcessing(false);
+    }
+  }
+
+  async function processFile(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setProcessing(true);
+    setProcessingError("");
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const response = await fetch(`${API_BASE}/api/job/questions/process`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) throw new Error("Could not process questions file");
+      const data = await response.json();
+      if (data.message) setProcessingError(data.message);
+      setQuestions(data.questions);
+    } catch (err) {
+      setProcessingError(err.message);
+    } finally {
+      setProcessing(false);
+      event.target.value = "";
+    }
+  }
+
+  function updateQuestion(index, field, value) {
+    setQuestions((current) =>
+      current.map((question, i) => (i === index ? { ...question, [field]: value } : question))
+    );
+  }
+
+  function removeQuestion(index) {
+    setQuestions((current) => current.filter((_, i) => i !== index));
+  }
+
+  function addQuestion() {
+    setQuestions((current) => [...current, blankQuestion()]);
   }
 
   return (
@@ -63,6 +136,75 @@ export function JobEditor({ job, onSave, saving }) {
           {saving ? <Loader2 className="spin" size={17} /> : <Sparkles size={17} />}
           Save JD
         </button>
+      </section>
+
+      <section className="form-panel full">
+        <h2>Custom Technical Questions <span className="optional-tag">optional</span></h2>
+        <p className="panel-hint">
+          Upload a question bank (PDF, DOCX, or TXT) or paste raw technical / coding questions.
+          The AI will restructure them into a clean format and they will be asked to candidates
+          during the technical interview, with a textbox to type the answer.
+        </p>
+
+        <label className="field full">
+          <span>Paste questions (one per line)</span>
+          <textarea
+            value={manualText}
+            onChange={(event) => setManualText(event.target.value)}
+            rows={5}
+            placeholder={"1. Write a function to reverse a linked list\n2. Explain the difference between SQL and NoSQL"}
+          />
+        </label>
+
+        <div className="questions-actions">
+          <button type="button" className="secondary-button" onClick={processManualText} disabled={processing || !manualText.trim()}>
+            {processing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+            Restructure with AI
+          </button>
+          <label className="secondary-button file-button">
+            <Upload size={16} />
+            Upload file
+            <input type="file" accept=".pdf,.docx,.txt" onChange={processFile} hidden />
+          </label>
+        </div>
+
+        {processingError ? <div className="notice info">{processingError}</div> : null}
+
+        {questions.length ? (
+          <div className="questions-list">
+            <div className="questions-list-head">
+              <h3>Structured questions ({questions.length})</h3>
+              <button type="button" className="secondary-button small" onClick={addQuestion}>
+                <Plus size={15} /> Add
+              </button>
+            </div>
+            {questions.map((question, index) => (
+              <div key={index} className="question-item">
+                <textarea
+                  rows={3}
+                  value={question.question}
+                  onChange={(event) => updateQuestion(index, "question", event.target.value)}
+                  placeholder="Question text"
+                />
+                <div className="question-meta">
+                  <input
+                    value={question.topic || "General"}
+                    onChange={(event) => updateQuestion(index, "topic", event.target.value)}
+                    placeholder="Topic"
+                  />
+                  <select value={question.difficulty || "medium"} onChange={(event) => updateQuestion(index, "difficulty", event.target.value)}>
+                    <option value="easy">Easy</option>
+                    <option value="medium">Medium</option>
+                    <option value="hard">Hard</option>
+                  </select>
+                  <button type="button" className="icon-button danger" onClick={() => removeQuestion(index)} title="Remove question">
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </section>
     </form>
   );

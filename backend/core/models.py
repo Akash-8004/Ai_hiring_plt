@@ -14,6 +14,7 @@ class JobDescription:
     education: str
     description: str
     threshold: int = 80
+    custom_questions: list[dict] = field(default_factory=list)
 
 
 @dataclass

@@ -3,6 +3,7 @@ import {
   Bot,
   CheckCircle2,
   Clock,
+  Code2,
   Info,
   Loader2,
   Mic,
@@ -18,6 +19,13 @@ import { createLiveClient } from "./liveClient";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
+// The interviewer announces the written coding questions with phrases like
+// "hiring team" / "answer box" / "write your answer". Show the question panel
+// only once the AI reaches that part of the interview.
+function shouldStartTechQuestions(text) {
+  return /hiring team|answer box|text box|type your answer|write your answer/i.test(text || "");
+}
+
 export function InterviewApp({ token, interviewType }) {
   const [session, setSession] = useState(null);
   const [phase, setPhase] = useState("loading");
@@ -25,6 +33,12 @@ export function InterviewApp({ token, interviewType }) {
   const [messages, setMessages] = useState([]);
   const [streaming, setStreaming] = useState(null);
   const [result, setResult] = useState(null);
+  const [customQuestions, setCustomQuestions] = useState([]);
+
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [draft, setDraft] = useState("");
+  const [showAllQuestions, setShowAllQuestions] = useState(false);
+  const [techPhase, setTechPhase] = useState("hidden"); // "hidden" | "question" | "done"
 
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [isAiSpeaking, setIsAiSpeaking] = useState(false);
@@ -34,7 +48,11 @@ export function InterviewApp({ token, interviewType }) {
   const liveRef = useRef(null);
   const transcriptRef = useRef([]);
   const streamingRef = useRef({ role: null, text: "" });
-  const messagesEndRef = useRef(null);
+  const answeredRef = useRef(new Set());
+  const skippedRef = useRef(new Set());
+  const techPhaseRef = useRef("hidden");
+  const activeIndexRef = useRef(0);
+  const transcriptListRef = useRef(null);
 
   // Fetch session data
   useEffect(() => {
@@ -45,6 +63,7 @@ export function InterviewApp({ token, interviewType }) {
       })
       .then((data) => {
         setSession(data);
+        setCustomQuestions(data.customQuestions || []);
         if (data.completed) {
           setPhase("done");
           setResult({ decision: data.decision, score: data.score });
@@ -58,9 +77,11 @@ export function InterviewApp({ token, interviewType }) {
       });
   }, [token]);
 
-  // Auto scroll chat
+  // Auto-scroll only the transcript panel (never the whole page) so the
+  // question box appearing below does not cause the page to jump.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const list = transcriptListRef.current;
+    if (list) list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
   }, [messages, streaming, isAiThinking]);
 
   function finalizeStreaming() {
@@ -74,6 +95,55 @@ export function InterviewApp({ token, interviewType }) {
     }
     streamingRef.current = { role: null, text: "" };
     setStreaming(null);
+  }
+
+  // Once the AI announces the written coding questions, reveal the panel and
+  // show the first unanswered question.
+  function checkTechTransition(text) {
+    if (!isTechnical || !customQuestions.length || techPhaseRef.current !== "hidden") return;
+    if (!shouldStartTechQuestions(text)) return;
+    techPhaseRef.current = "question";
+    activeIndexRef.current = 0;
+    setTechPhase("question");
+    setActiveIndex(0);
+    setDraft("");
+  }
+
+  function nextUnansweredIndex(fromIndex) {
+    for (let offset = 1; offset <= customQuestions.length; offset += 1) {
+      const index = (fromIndex + offset) % customQuestions.length;
+      const id = customQuestions[index].id;
+      if (!answeredRef.current.has(id) && !skippedRef.current.has(id)) return index;
+    }
+    return -1;
+  }
+
+  function advanceToNextUnanswered() {
+    const next = nextUnansweredIndex(activeIndexRef.current);
+    if (next === -1) {
+      techPhaseRef.current = "done";
+      setTechPhase("done");
+      return;
+    }
+    activeIndexRef.current = next;
+    setActiveIndex(next);
+    setDraft("");
+  }
+
+  // When the AI announces the next custom question ("...from the hiring team")
+  // and the currently displayed question was already answered or skipped,
+  // move the textbox on to the next unanswered question. This keeps the panel
+  // in sync when the candidate skips a question via voice.
+  function checkQuestionAnnouncement(text) {
+    if (!isTechnical || !customQuestions.length || techPhaseRef.current === "hidden") return;
+    if (!/hiring team/.test(text || "")) return;
+    const current = customQuestions[activeIndexRef.current];
+    const resolved =
+      !current ||
+      answeredRef.current.has(current.id) ||
+      skippedRef.current.has(current.id);
+    if (!resolved) return;
+    advanceToNextUnanswered();
   }
 
   // ── Live voice interview (Gemini Live via backend relay) ─────────────────
@@ -93,11 +163,20 @@ export function InterviewApp({ token, interviewType }) {
           streamingRef.current.text += ` ${text}`;
         }
         setStreaming({ role, text: streamingRef.current.text });
-        if (role === "interviewer") setIsAiSpeaking(true);
+        if (role === "interviewer") {
+          setIsAiSpeaking(true);
+          checkTechTransition(streamingRef.current.text);
+          checkQuestionAnnouncement(streamingRef.current.text);
+        }
       },
       onTurnComplete: () => {
         setIsAiSpeaking(false);
         finalizeStreaming();
+        const last = transcriptRef.current[transcriptRef.current.length - 1];
+        if (last && last.role === "interviewer") {
+          checkTechTransition(last.content);
+          checkQuestionAnnouncement(last.content);
+        }
       },
       onEvaluation: (data) => {
         finalizeStreaming();
@@ -166,11 +245,47 @@ export function InterviewApp({ token, interviewType }) {
   async function startInterview() {
     setPhase("live");
     setError("");
+    answeredRef.current.clear();
+    skippedRef.current.clear();
+    techPhaseRef.current = "hidden";
+    activeIndexRef.current = 0;
+    setTechPhase("hidden");
+    setActiveIndex(0);
+    setDraft("");
+    setShowAllQuestions(false);
     await startLive();
+  }
+
+  function submitAnswer(question, text) {
+    const answer = (text || "").trim();
+    if (!answer) {
+      // Clicked submit without writing anything — tell the AI so it responds
+      // honestly ("no written answer received") instead of claiming it saw one.
+      skippedRef.current.add(question.id);
+      if (liveRef.current) {
+        liveRef.current.sendAnswer({ text: "", question: question.question });
+      }
+      return;
+    }
+    answeredRef.current.add(question.id);
+    skippedRef.current.delete(question.id);
+    const msg = {
+      role: "candidate",
+      content: answer,
+      type: "written",
+      question: question.question,
+    };
+    setMessages((prev) => [...prev, msg]);
+    transcriptRef.current = [...transcriptRef.current, msg];
+    if (liveRef.current) {
+      liveRef.current.sendAnswer({ text: answer, question: question.question });
+    }
+    advanceToNextUnanswered();
   }
 
   const isTechnical = interviewType === "technical";
   const typeLabel = isTechnical ? "Technical" : "HR";
+  const activeQuestion = customQuestions[activeIndex] || null;
 
   return (
     <div className="interview-app">
@@ -255,6 +370,13 @@ export function InterviewApp({ token, interviewType }) {
               </div>
             )}
 
+            {isTechnical && customQuestions.length > 0 ? (
+              <div className="instructions-note">
+                <Code2 size={18} />
+                <p><strong>Coding Questions:</strong> The interviewer may also ask you coding questions from the company's question bank. When a coding question is asked, a <strong>textbox</strong> will appear below the conversation for you to type your answer.</p>
+              </div>
+            ) : null}
+
             <div className="start-section">
               <h3>Ready to Begin?</h3>
               <p>When you click Start Interview, your microphone will be activated and the AI interviewer will begin the conversation.</p>
@@ -337,10 +459,16 @@ export function InterviewApp({ token, interviewType }) {
                   <h3>Live Transcript</h3>
                   <span className="transcript-count">{messages.length} turns</span>
                 </div>
-                <div className="transcript-list">
+                <div className="transcript-list" ref={transcriptListRef}>
                   {messages.map((message, index) => (
-                    <div key={index} className={`chat-bubble ${message.role}`}>
-                      <strong>{message.role === "candidate" ? "You" : "AI Interviewer"}</strong>
+                    <div key={index} className={`chat-bubble ${message.role}${message.type === "written" ? " written" : ""}`}>
+                      <strong>
+                        {message.type === "written"
+                          ? "You (written answer)"
+                          : message.role === "candidate"
+                            ? "You"
+                            : "AI Interviewer"}
+                      </strong>
                       <p>{message.content}</p>
                     </div>
                   ))}
@@ -350,10 +478,68 @@ export function InterviewApp({ token, interviewType }) {
                       <p>{streaming.text}</p>
                     </div>
                   ) : null}
-                  <div ref={messagesEndRef} />
                 </div>
               </div>
             </div>
+
+            {/* ─── Custom coding questions (written answer box) ─── */}
+            {isTechnical && customQuestions.length > 0 && techPhase !== "hidden" && (
+              <div className="question-bank">
+                <div className="question-bank-header">
+                  <div>
+                    <h3><Code2 size={16} /> Coding Questions</h3>
+                    <span className="question-bank-count">{answeredRef.current.size} of {customQuestions.length} answered</span>
+                  </div>
+                  <button type="button" className="secondary-button small" onClick={() => setShowAllQuestions((value) => !value)}>
+                    {showAllQuestions ? "Hide list" : "Show all questions"}
+                  </button>
+                </div>
+
+                {showAllQuestions ? (
+                  <div className="question-all-list">
+                    {customQuestions.map((question, index) => {
+                      const isAnswered = answeredRef.current.has(question.id);
+                      return (
+                        <div key={question.id} className={`question-item ${isAnswered ? "answered" : ""}`}>
+                          <div className="question-text">
+                            <strong>{index + 1}. {question.question}</strong>
+                            <span className="question-tags">{question.topic} · {question.difficulty}</span>
+                          </div>
+                          {isAnswered ? (
+                            <div className="saved-answer">
+                              <CheckCircle2 size={15} /> Answer submitted
+                            </div>
+                          ) : (
+                            <AllQuestionForm question={question} onSubmit={submitAnswer} />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : techPhase === "done" ? (
+                  <div className="active-question done">
+                    <CheckCircle2 size={18} />
+                    All coding questions answered — great work!
+                  </div>
+                ) : activeQuestion ? (
+                  <div className="active-question">
+                    <div className="question-text">
+                      <strong>Question {activeIndex + 1} of {customQuestions.length}: {activeQuestion.question}</strong>
+                      <span className="question-tags">{activeQuestion.topic} · {activeQuestion.difficulty}</span>
+                    </div>
+                    <textarea
+                      rows={5}
+                      value={draft}
+                      onChange={(event) => setDraft(event.target.value)}
+                      placeholder="Type your code / technical answer here…"
+                    />
+                    <button type="button" className="primary-button submit-answer" onClick={() => submitAnswer(activeQuestion, draft)}>
+                      Submit Answer
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            )}
           </div>
         )}
 
@@ -375,6 +561,25 @@ export function InterviewApp({ token, interviewType }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function AllQuestionForm({ question, onSubmit }) {
+  const [text, setText] = useState("");
+  return (
+    <div className="all-question-form">
+      <textarea rows={3} value={text} onChange={(event) => setText(event.target.value)} placeholder="Type your answer…" />
+      <button
+        type="button"
+        className="primary-button submit-answer"
+        onClick={() => {
+          onSubmit(question, text);
+          setText("");
+        }}
+      >
+        Submit
+      </button>
     </div>
   );
 }

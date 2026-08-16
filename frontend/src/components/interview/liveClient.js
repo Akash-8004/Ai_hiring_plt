@@ -219,6 +219,10 @@ export function createLiveClient({ token, onReady, onTranscript, onTurnComplete,
         }
       }
     },
+    sendAnswer({ text, question }) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: "answer", text, question }));
+    },
     async close() {
       closed = true;
       clearPlayback();

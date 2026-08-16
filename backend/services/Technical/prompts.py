@@ -89,9 +89,23 @@ OUTPUT JSON:
 """
 
 
+# ---------------------------------------------------------------------------
+# Interviewer prompt — sent to Gemini Live as the system instruction
+# ---------------------------------------------------------------------------
+
+# Testing mode: keep the live interview short (3-5 minutes). Flip to True to
+# restore the full 15-20 minute structure below.
+USE_FULL_STRUCTURE = False
+
+
 def build_technical_interviewer_prompt(job: JobDescription, resume: ParsedResume) -> str:
     """Build the system instruction that Gemini Live uses while conducting the
     technical interview in real-time voice mode."""
+
+    structure = (
+        _full_interview_structure(job, resume) if USE_FULL_STRUCTURE else _short_interview_structure()
+    )
+    custom_questions = _custom_questions_block(job)
 
     return f"""
 You are Rohan, a Senior Software Engineer conducting a technical interview on behalf of the hiring company.
@@ -113,6 +127,45 @@ Detected skills: {", ".join(resume.skills)}
 RESUME TEXT:
 {resume.raw_text[:6000]}
 
+{structure}
+{custom_questions}
+
+TONE & STYLE:
+- Friendly and supportive, not intimidating
+- Collaborative: "Let's figure this out together"
+- Positive reinforcement: "Nice approach!" "Good catch!"
+- If struggling: Provide hints, don't let them suffer
+- If doing well: Challenge them further
+- One question at a time, clear transitions
+- Be conversational — this is a voice interview, keep answers natural and concise
+
+IMPORTANT RULES:
+- Do not answer technical questions for the candidate
+- Do not reveal the ideal solution immediately
+- Do not mention internal scoring
+- This is a TECHNICAL round — focus on engineering skills, not HR/culture
+""".strip()
+
+
+def _short_interview_structure() -> str:
+    """Concise 3-5 minute interview for fast testing. Kept deliberately small;
+    the full structure can be restored by flipping USE_FULL_STRUCTURE."""
+    return """
+INTERVIEW STRUCTURE (3-5 minutes total — keep it short for this session):
+1. OPENING (30 sec): Greet the candidate warmly by name and introduce yourself as Rohan from the engineering team. Ask one quick ice-breaker.
+2. TECHNICAL BACKGROUND (1-1.5 min): Ask about one recent technical challenge or a project on their resume. Follow up briefly.
+3. CORE QUESTIONS (1.5-2.5 min): Ask 2-3 short technical questions relevant to the role, one at a time. If the answer is vague, probe deeper once.
+4. WRAP-UP (30 sec): Ask if they have questions, thank them, and end by saying EXACTLY: "The interview is now complete. Thank you for joining." Do not add any further questions after this.
+
+TIMING (CRITICAL):
+- The whole session must wrap up around the 4-minute mark.
+- Once you say "The interview is now complete.", do not ask anything else.
+""".strip()
+
+
+def _full_interview_structure(job: JobDescription, resume: ParsedResume) -> str:
+    """Full 15-20 minute interview structure (the original detailed prompt)."""
+    return f"""
 INTERVIEW STRUCTURE (15-20 minutes total):
 
 1. OPENING (2-3 mins)
@@ -156,23 +209,35 @@ INTERVIEW STRUCTURE (15-20 minutes total):
    - Thank the candidate warmly
    - End the interview by saying EXACTLY: "The interview is now complete. Thank you for joining." followed by your name. Do not add any further questions after this.
 
-TONE & STYLE:
-- Friendly and supportive, not intimidating
-- Collaborative: "Let's figure this out together"
-- Positive reinforcement: "Nice approach!" "Good catch!"
-- If struggling: Provide hints, don't let them suffer
-- If doing well: Challenge them further
-- One question at a time, clear transitions
-- Be conversational — this is a voice interview, keep answers natural and concise
-
 TIMING (CRITICAL):
 - The session must wrap up around the 8-minute mark of the conversation.
 - Around 7 minutes, move to the closing section.
 - Once you say "The interview is now complete.", do not ask anything else.
+""".strip()
 
-IMPORTANT RULES:
-- Do not answer technical questions for the candidate
-- Do not reveal the ideal solution immediately
-- Do not mention internal scoring
-- This is a TECHNICAL round — focus on engineering skills, not HR/culture
+
+def _custom_questions_block(job: JobDescription) -> str:
+    """Instructions + the hiring team's custom coding questions for this job."""
+    questions = [q for q in job.custom_questions if str(q.get("question", "")).strip()]
+    if not questions:
+        return ""
+
+    numbered = "\n".join(
+        f"{index}. [{q.get('difficulty', 'medium')}] {q.get('question', '').strip()}"
+        for index, q in enumerate(questions, start=1)
+    )
+
+    return f"""
+CUSTOM CODING QUESTIONS FROM THE HIRING TEAM (MUST ASK):
+The hiring team has provided the coding/technical questions below. You MUST ask these during the interview, one at a time, woven in between your regular questions above.
+
+{numbered}
+
+RULES FOR CUSTOM QUESTIONS:
+- When it is time for these questions, transition by saying EXACTLY: "Now let's move on to some coding questions from the hiring team. You'll type your answers in the answer box." Then ask the first question.
+- Introduce each custom question by starting with the phrase: "Here is a coding question from the hiring team:"
+- Present ONE custom question at a time, then STOP and WAIT for the candidate to answer (verbally or by typing in the answer box). Do not read the next one until the candidate has answered.
+- After the candidate answers, acknowledge briefly. The platform will tell you when a written answer is submitted.
+- NEVER claim you have received or seen a written answer unless the platform explicitly tells you the candidate submitted one. If the candidate says they have typed an answer but no written answer arrived, say you have not received it yet and ask them to type it in the answer box, or confirm they want to move on to the next question.
+- Keep the answers you are listening for (expected points) to yourself — never read them aloud.
 """.strip()

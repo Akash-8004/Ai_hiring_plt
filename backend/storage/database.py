@@ -39,6 +39,7 @@ def save_job(job: JobDescription) -> None:
         "education": job.education,
         "description": job.description,
         "threshold": job.threshold,
+        "custom_questions": job.custom_questions,
     }
     _jobs.replace_one({"_id": "current"}, doc, upsert=True)
 
@@ -130,20 +131,21 @@ def set_candidate_hr_interview(email: str, interview: dict) -> None:
     )
 
 
-def append_transcript_turn(email: str, role: str, text: str) -> None:
-    """Persist one interview turn as it happens so a closed tab never loses it."""
+def append_transcript_turn(email: str, role: str, text: str, extra: dict | None = None) -> None:
+    """Persist one interview turn as it happens so a closed tab never loses it.
+    `extra` can carry metadata such as `type` ("written") or the `question`
+    a typed answer was replying to."""
     content = (text or "").strip()
     if not content:
         return
+    turn = {
+        "role": role,
+        "content": content,
+        "at": datetime.utcnow().isoformat(),
+    }
+    if extra:
+        turn.update(extra)
     _candidates.update_one(
         {"email": email},
-        {
-            "$push": {
-                "interview_transcript": {
-                    "role": role,
-                    "content": content,
-                    "at": datetime.utcnow().isoformat(),
-                }
-            }
-        },
+        {"$push": {"interview_transcript": turn}},
     )

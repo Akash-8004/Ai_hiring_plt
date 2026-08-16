@@ -161,7 +161,10 @@ def _format_transcript(transcript: list[dict]) -> str:
     for message in transcript:
         role = message.get("role", "unknown")
         content = message.get("content") or message.get("message") or ""
-        lines.append(f"{role.upper()}: {str(content)[:2000]}")
+        label = role.upper()
+        if message.get("type") == "written":
+            label += " (WRITTEN)"
+        lines.append(f"{label}: {str(content)[:2000]}")
     return "\n".join(lines) if lines else "(empty transcript)"
 
 

@@ -110,8 +110,15 @@ export function CandidatePanel({ candidate, onClose }) {
           <div className="transcript-box">
             {candidate.interview_transcript.map((turn, index) => (
               <p key={index} className={turn.role === "candidate" ? "transcript-candidate" : ""}>
-                <strong>{turn.role === "candidate" ? "Candidate:" : "AI Interviewer:"}</strong>{" "}
+                <strong>
+                  {turn.type === "written"
+                    ? "Candidate (written):"
+                    : turn.role === "candidate"
+                      ? "Candidate:"
+                      : "AI Interviewer:"}
+                </strong>{" "}
                 {turn.content}
+                {turn.question ? <span className="transcript-question"> — {turn.question}</span> : null}
               </p>
             ))}
           </div>

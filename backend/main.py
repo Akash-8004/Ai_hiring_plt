@@ -21,6 +21,7 @@ from backend.live.relay import GeminiLiveRelay
 from backend.services.ai_ranker import AIRankingService
 from backend.services.interview_agent import InterviewAgent
 from backend.services.Technical.interviewer import get_interviewer_prompt
+from backend.services.Technical.question_processor import QuestionProcessor
 from backend.services.ranking import score_candidates
 from backend.services.resume_parser import parse_resume_text, parse_uploaded_resume
 from backend.services.Technical.technical_evaluator import TechnicalInterviewEvaluator
@@ -40,6 +41,7 @@ app.add_middleware(
 ranking_service = AIRankingService()
 interview_agent = InterviewAgent()
 technical_evaluator = TechnicalInterviewEvaluator()
+question_processor = QuestionProcessor()
 current_job = database.load_job() or DEFAULT_JOB
 candidate_resumes: list[ParsedResume] = database.load_candidates()
 
@@ -54,11 +56,16 @@ class JobPayload(BaseModel):
     education: str
     description: str
     threshold: int = Field(ge=40, le=100)
+    custom_questions: list[dict] = Field(default_factory=list)
 
 
 class ManualResumePayload(BaseModel):
     file_name: str = "manual_resume.txt"
     text: str
+
+
+class ProcessQuestionsPayload(BaseModel):
+    text: str = ""
 
 
 class EvaluationPayload(BaseModel):
@@ -83,6 +90,32 @@ def update_job(payload: JobPayload) -> dict[str, Any]:
     current_job = JobDescription(**payload.model_dump())
     database.save_job(current_job)
     return _workspace_payload()
+
+
+@app.post("/api/job/questions/process")
+async def process_questions_file(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Restructure HR-supplied coding questions from an uploaded PDF/DOCX/TXT."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="A file is required.")
+    questions = await asyncio.to_thread(question_processor.process_file, file)
+    return {
+        "questions": questions,
+        "provider_used": question_processor.last_provider_used,
+        "message": question_processor.last_error,
+    }
+
+
+@app.post("/api/job/questions/process-text")
+def process_questions_text(payload: ProcessQuestionsPayload) -> dict[str, Any]:
+    """Restructure HR-supplied coding questions from manually pasted text."""
+    if not payload.text.strip():
+        raise HTTPException(status_code=400, detail="Question text is required.")
+    questions = question_processor.process_text(payload.text)
+    return {
+        "questions": questions,
+        "provider_used": question_processor.last_provider_used,
+        "message": question_processor.last_error,
+    }
 
 
 @app.post("/api/resumes/manual")
@@ -181,6 +214,11 @@ def interview_session(token: str) -> dict[str, Any]:
         "resumeText": resume.raw_text,
         "interviewType": interview_type,
         "systemPrompt": system_prompt,
+        "customQuestions": (
+            _sanitized_questions(current_job.custom_questions)
+            if interview_type == "technical"
+            else []
+        ),
         "completed": interview_data.get("status") == "completed",
         "decision": interview_data.get("decision"),
         "score": interview_data.get("score"),
@@ -312,6 +350,43 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
                 if mtype == "audio":
                     data = base64.b64decode(msg.get("data") or "")
                     await to_gemini.put(("audio", data))
+                elif mtype == "answer":
+                    answer_text = (msg.get("text") or "").strip()
+                    question = (msg.get("question") or "").strip()
+                    if answer_text:
+                        turn = {
+                            "role": "candidate",
+                            "content": answer_text,
+                            "type": "written",
+                        }
+                        if question:
+                            turn["question"] = question
+                        transcript.append(turn)
+                        database.append_transcript_turn(
+                            email,
+                            "candidate",
+                            answer_text,
+                            {"type": "written", "question": question},
+                        )
+                        await to_gemini.put(
+                            (
+                                "text",
+                                "The candidate submitted a written answer for the coding question. "
+                                "Acknowledge their answer briefly. If there are more custom questions "
+                                "remaining, say something like 'Let's move on to the next question' and "
+                                "ask the next one. If this was the last one, continue the normal flow.",
+                            )
+                        )
+                    else:
+                        await to_gemini.put(
+                            (
+                                "text",
+                                "The candidate clicked Submit without writing any answer. Tell them: "
+                                "'I haven't received a written answer. You can either type your answer "
+                                "in the answer box and click Submit, or if you prefer we can move on to "
+                                "the next question.' Then wait for their choice.",
+                            )
+                        )
                 elif mtype == "end":
                     done.set()
         except (WebSocketDisconnect, RuntimeError):
@@ -345,6 +420,13 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
                         await relay.send_audio(session, payload)
                     # else: model is speaking; drop the mic feed so its own voice
                     # cannot make it barge itself in (echo).
+                elif kind == "text":
+                    # Inject a textual instruction into the live session (e.g. to
+                    # acknowledge a written answer and move to the next question).
+                    await session.send_client_content(
+                        turns={"role": "user", "parts": [{"text": payload}]},
+                        turn_complete=True,
+                    )
         except Exception:
             import traceback
 
@@ -504,6 +586,24 @@ def _workspace_payload() -> dict[str, Any]:
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+def _sanitized_questions(custom_questions: list[dict]) -> list[dict]:
+    """Candidate-safe view of the custom question bank (no expected points)."""
+    result = []
+    for index, item in enumerate(custom_questions, start=1):
+        question = str(item.get("question", "")).strip()
+        if not question:
+            continue
+        result.append(
+            {
+                "id": f"q{index}",
+                "question": question,
+                "topic": str(item.get("topic", "General")).strip() or "General",
+                "difficulty": str(item.get("difficulty", "medium")).strip() or "medium",
+            }
+        )
+    return result
+
 
 def _run_interview_evaluation(
     email: str, resume: ParsedResume, interview_type: str, transcript: list[dict]
