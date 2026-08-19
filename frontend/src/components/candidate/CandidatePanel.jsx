@@ -1,13 +1,47 @@
-import React from "react";
-import { XCircle } from "lucide-react";
+import React, { useState } from "react";
+import { XCircle, Video, Play, X } from "lucide-react";
 import { StatusBadge } from "../common/StatusBadge";
 import { CopyButton } from "../common/CopyButton";
+
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 export function CandidatePanel({ candidate, onClose }) {
   const invitation = candidate.invitation;
   const techInterview = candidate.technical_interview || {};
   const hrInvitation = candidate.hr_invitation;
   const hrInterview = candidate.hr_interview || {};
+
+  const [videoModal, setVideoModal] = useState(null); // { email, type, label }
+  const [videoUrl, setVideoUrl] = useState(null);
+  const [videoLoading, setVideoLoading] = useState(false);
+
+  async function openRecording(email, type, label) {
+    setVideoModal({ email, type, label });
+    setVideoUrl(null);
+    setVideoLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/interview/recording/${encodeURIComponent(email)}/${type}`);
+      if (!res.ok) throw new Error("Recording not found");
+      const data = await res.json();
+      // Use presigned URL if available, otherwise use local file endpoint
+      if (data.url) {
+        setVideoUrl(data.url);
+      } else if (data.local_path) {
+        const filename = data.local_path.split(/[/\\]/).pop();
+        setVideoUrl(`${API_BASE}/api/interview/recording/local/${filename}`);
+      }
+    } catch (err) {
+      console.error("Failed to load recording:", err);
+      setVideoUrl(null);
+    } finally {
+      setVideoLoading(false);
+    }
+  }
+
+  function closeVideoModal() {
+    setVideoModal(null);
+    setVideoUrl(null);
+  }
 
   return (
     <aside className="candidate-panel">
@@ -79,6 +113,15 @@ export function CandidatePanel({ candidate, onClose }) {
             ) : null}
           </div>
         ) : null}
+        {techInterview.recording ? (
+          <button
+            type="button"
+            className="watch-recording-btn"
+            onClick={() => openRecording(candidate.Email, "technical", "Technical Interview")}
+          >
+            <Play size={15} /> Watch Recording
+          </button>
+        ) : null}
       </section>
 
       {/* HR Interview Section */}
@@ -100,6 +143,15 @@ export function CandidatePanel({ candidate, onClose }) {
             </div>
             {hrInterview.evaluation?.feedback ? <p>{hrInterview.evaluation.feedback}</p> : null}
           </div>
+        ) : null}
+        {hrInterview.recording ? (
+          <button
+            type="button"
+            className="watch-recording-btn"
+            onClick={() => openRecording(candidate.Email, "hr", "HR Interview")}
+          >
+            <Play size={15} /> Watch Recording
+          </button>
         ) : null}
       </section>
 
@@ -124,6 +176,37 @@ export function CandidatePanel({ candidate, onClose }) {
           </div>
         </section>
       ) : null}
+
+      {/* Video Playback Modal */}
+      {videoModal && (
+        <div className="video-modal-overlay" onClick={closeVideoModal}>
+          <div className="video-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="video-modal-header">
+              <h3><Video size={18} /> {videoModal.label} Recording</h3>
+              <button type="button" className="video-modal-close" onClick={closeVideoModal}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="video-modal-body">
+              {videoLoading ? (
+                <div className="video-modal-loading">Loading recording…</div>
+              ) : videoUrl ? (
+                <video
+                  key={videoUrl}
+                  controls
+                  autoPlay
+                  className="video-modal-player"
+                  src={videoUrl}
+                >
+                  Your browser does not support video playback.
+                </video>
+              ) : (
+                <div className="video-modal-loading">Recording not available.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }

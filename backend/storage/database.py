@@ -131,6 +131,15 @@ def set_candidate_hr_interview(email: str, interview: dict) -> None:
     )
 
 
+def set_candidate_interview_recording(email: str, interview_type: str, recording_meta: dict) -> None:
+    """Persist recording metadata inside the interview document."""
+    field = f"{interview_type}_interview"
+    _candidates.update_one(
+        {"email": email},
+        {"$set": {f"{field}.recording": recording_meta}},
+    )
+
+
 def append_transcript_turn(email: str, role: str, text: str, extra: dict | None = None) -> None:
     """Persist one interview turn as it happens so a closed tab never loses it.
     `extra` can carry metadata such as `type` ("written") or the `question`

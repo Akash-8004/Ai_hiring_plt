@@ -30,17 +30,17 @@ SAMPLE_RESUMES = [
     GitHub: github.com/priya-builds
     Built SaaS APIs, optimized database queries, and deployed services with Docker.
     """,
-    """
-    Name: Rahul Mehta
-    Email: rahul.mehta@example.com
-    Phone: +91 9123456780
-    Experience: 2 years
-    Education: BCA
-    Skills: JavaScript, React, Node.js, MongoDB, HTML, CSS
-    LinkedIn: linkedin.com/in/rahulmehta
-    GitHub: github.com/rahul-ui
-    Worked mainly on frontend dashboards and basic API integration.
-    """,
+    # """
+    # Name: Rahul Mehta
+    # Email: rahul.mehta@example.com
+    # Phone: +91 9123456780
+    # Experience: 2 years
+    # Education: BCA
+    # Skills: JavaScript, React, Node.js, MongoDB, HTML, CSS
+    # LinkedIn: linkedin.com/in/rahulmehta
+    # GitHub: github.com/rahul-ui
+    # Worked mainly on frontend dashboards and basic API integration.
+    # """,
     """
     Name: Ananya Iyer
     Email: ananya.iyer@example.com

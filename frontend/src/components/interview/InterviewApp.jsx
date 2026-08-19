@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import {
   Bot,
   CheckCircle2,
@@ -12,6 +12,7 @@ import {
   PhoneOff,
   UsersRound,
   Video,
+  VideoOff,
   Volume2,
   XCircle,
 } from "lucide-react";
@@ -44,8 +45,11 @@ export function InterviewApp({ token, interviewType }) {
   const [isAiSpeaking, setIsAiSpeaking] = useState(false);
   const [isMicActive, setIsMicActive] = useState(false);
   const [isAudioStreaming, setIsAudioStreaming] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [cameraStream, setCameraStream] = useState(null);
 
   const liveRef = useRef(null);
+  const videoRef = useRef(null);
   const transcriptRef = useRef([]);
   const streamingRef = useRef({ role: null, text: "" });
   const answeredRef = useRef(new Set());
@@ -148,11 +152,38 @@ export function InterviewApp({ token, interviewType }) {
 
   // ── Live voice interview (Gemini Live via backend relay) ─────────────────
 
+  const uploadRecording = useCallback(async (interviewType) => {
+    const client = liveRef.current;
+    if (!client) return;
+    try {
+      const blob = await client.stopRecording();
+      if (!blob || blob.size === 0) return;
+      const formData = new FormData();
+      formData.append("file", blob, "recording.webm");
+      formData.append("token", token);
+      formData.append("interview_type", interviewType);
+      await fetch(`${API_BASE}/api/interview/recording/upload`, {
+        method: "POST",
+        body: formData,
+      });
+      console.log("[interview] recording uploaded", { size: blob.size });
+    } catch (err) {
+      console.error("[interview] recording upload failed:", err);
+    }
+  }, [token]);
+
   async function startLive() {
     setIsAudioStreaming(false);
     const client = createLiveClient({
       token,
-      onReady: () => setIsMicActive(true),
+      onReady: () => {
+        setIsMicActive(true);
+        // Attach camera preview and start recording
+        const camStream = client.getCameraStream();
+        if (camStream) setCameraStream(camStream);
+        client.startRecording();
+        setIsRecording(true);
+      },
       onAudioStreaming: () => setIsAudioStreaming(true),
       onTranscript: (role, text) => {
         if (!text) return;
@@ -178,8 +209,13 @@ export function InterviewApp({ token, interviewType }) {
           checkQuestionAnnouncement(last.content);
         }
       },
-      onEvaluation: (data) => {
+      onEvaluation: async (data) => {
         finalizeStreaming();
+        // Stop recording and upload before showing results
+        if (liveRef.current) {
+          setIsRecording(false);
+          await uploadRecording(interviewType);
+        }
         setResult(data);
         setPhase("done");
         client.close();
@@ -211,6 +247,8 @@ export function InterviewApp({ token, interviewType }) {
 
   async function endInterview() {
     if (liveRef.current) {
+      setIsRecording(false);
+      await uploadRecording(interviewType);
       await liveRef.current.close();
     }
     if ("speechSynthesis" in window) {
@@ -245,6 +283,8 @@ export function InterviewApp({ token, interviewType }) {
   async function startInterview() {
     setPhase("live");
     setError("");
+    setIsRecording(false);
+    setCameraStream(null);
     answeredRef.current.clear();
     skippedRef.current.clear();
     techPhaseRef.current = "hidden";
@@ -379,9 +419,10 @@ export function InterviewApp({ token, interviewType }) {
 
             <div className="start-section">
               <h3>Ready to Begin?</h3>
-              <p>When you click Start Interview, your microphone will be activated and the AI interviewer will begin the conversation.</p>
+              <p>When you click Start Interview, your camera and microphone will be activated and the AI interviewer will begin the conversation.</p>
+              <p className="recording-notice"><Video size={15} /> This interview will be recorded for quality and evaluation purposes.</p>
               <button className="primary-button start-btn" onClick={startInterview}>
-                <Mic size={19} />
+                <Video size={19} />
                 Start {typeLabel} Interview
               </button>
             </div>
@@ -392,8 +433,35 @@ export function InterviewApp({ token, interviewType }) {
         {(phase === "live" || phase === "evaluating") && (
           <div className="interview-live-container">
             <div className="live-grid">
-              {/* Left — AI avatar visual */}
+              {/* Left — AI avatar visual + camera preview */}
               <div className="ai-avatar-card">
+                {/* Camera preview */}
+                <div className="camera-preview-container">
+                  {cameraStream ? (
+                    <video
+                      ref={(el) => {
+                        if (el && cameraStream && el.srcObject !== cameraStream) {
+                          el.srcObject = cameraStream;
+                          el.play().catch(() => {});
+                        }
+                      }}
+                      className="camera-preview"
+                      autoPlay
+                      muted
+                      playsInline
+                    />
+                  ) : (
+                    <div className="camera-preview camera-placeholder">
+                      <VideoOff size={28} />
+                    </div>
+                  )}
+                  {isRecording && (
+                    <span className="recording-badge">
+                      <span className="recording-dot" /> Recording
+                    </span>
+                  )}
+                </div>
+
                 <div
                   className={`ai-avatar ${
                     isAiSpeaking

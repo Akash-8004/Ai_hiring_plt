@@ -11,8 +11,9 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from backend.core.models import JobDescription, ParsedResume
@@ -25,6 +26,7 @@ from backend.services.Technical.question_processor import QuestionProcessor
 from backend.services.ranking import score_candidates
 from backend.services.resume_parser import parse_resume_text, parse_uploaded_resume
 from backend.services.Technical.technical_evaluator import TechnicalInterviewEvaluator
+from backend.services import r2_storage
 from backend.storage import database
 
 
@@ -236,6 +238,63 @@ def evaluate_interview(payload: EvaluationPayload) -> dict[str, Any]:
     if not resume:
         raise HTTPException(status_code=404, detail="Candidate not found.")
     return _run_interview_evaluation(email, resume, payload.interview_type, payload.transcript)
+
+
+# ── Recording Upload & Playback ────────────────────────────────────────────
+
+@app.post("/api/interview/recording/upload")
+async def upload_recording(
+    token: str = Form(...),
+    interview_type: str = Form("technical"),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    """Receive the browser-recorded WebM, persist to R2 + temp_files."""
+    email = _email_for_token(token)
+    if not email:
+        raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Empty recording file.")
+
+    recording_meta = await asyncio.to_thread(
+        r2_storage.upload_recording, email, interview_type, file_bytes
+    )
+    database.set_candidate_interview_recording(email, interview_type, recording_meta)
+    return {"ok": True, "recording": recording_meta}
+
+
+@app.get("/api/interview/recording/local/{filename}")
+def serve_local_recording(filename: str):
+    """Serve a recording file from temp_files/ for local development/testing."""
+    safe = Path(filename).name  # prevent path traversal
+    project_root = Path(__file__).resolve().parent.parent
+    file_path = project_root / "temp_files" / safe
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Recording file not found.")
+    return FileResponse(str(file_path), media_type="video/webm", content_disposition_type="inline")
+
+
+@app.get("/api/interview/recording/{email}/{interview_type}")
+def get_recording_url(email: str, interview_type: str) -> dict[str, Any]:
+    """Return a presigned URL (or local path) so HR can play the recording."""
+    doc = database.get_candidate_doc(email)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Candidate not found.")
+
+    interview = doc.get(f"{interview_type}_interview") or {}
+    recording = interview.get("recording")
+    if not recording:
+        raise HTTPException(status_code=404, detail="No recording available for this interview.")
+
+    r2_key = recording.get("r2_key", "")
+    presigned_url = r2_storage.get_recording_presigned_url(r2_key)
+    return {
+        "url": presigned_url,
+        "local_path": recording.get("local_path"),
+        "size_bytes": recording.get("size_bytes", 0),
+        "r2_configured": r2_storage.is_configured(),
+    }
 
 
 # ── Live Voice Interview (WebSocket relay) ─────────────────────────────────
@@ -539,6 +598,7 @@ def _workspace_payload() -> dict[str, Any]:
         row["technical_interview"] = doc.get("technical_interview")
         row["hr_interview"] = doc.get("hr_interview")
         row["interview_transcript"] = doc.get("interview_transcript") or []
+        row["recording"] = (doc.get("technical_interview") or {}).get("recording") or (doc.get("hr_interview") or {}).get("recording")
 
         stage = row["pipelineStage"]
         if stage in {"invited", "tech_passed", "tech_failed", "hr_failed", "hired"}:
@@ -620,6 +680,13 @@ def _run_interview_evaluation(
         if interview_agent.last_error:
             result["provider_error"] = interview_agent.last_error
 
+    # Preserve existing recording metadata if the interview doc already has one
+    existing_doc = database.get_candidate_doc(email) or {}
+    existing_interview = existing_doc.get(
+        "technical_interview" if interview_type == "technical" else "hr_interview"
+    ) or {}
+    recording = existing_interview.get("recording")
+
     interview = {
         "status": "completed",
         "type": interview_type,
@@ -628,6 +695,8 @@ def _run_interview_evaluation(
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "evaluation": result,
     }
+    if recording:
+        interview["recording"] = recording
 
     if interview_type == "technical":
         database.set_candidate_technical_interview(email, interview)
