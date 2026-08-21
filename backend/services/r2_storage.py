@@ -13,6 +13,8 @@ from botocore.config import Config
 
 TEMP_DIR = Path(__file__).resolve().parent.parent.parent / "temp_files"
 TEMP_DIR.mkdir(exist_ok=True)
+HR_TEMP_DIR = TEMP_DIR / "hr"
+HR_TEMP_DIR.mkdir(exist_ok=True)
 
 
 def _env(name: str) -> str:
@@ -53,7 +55,9 @@ def upload_recording(
     r2_key = f"recordings/{filename}"
 
     size_bytes = len(file_bytes)
-    local_path = str(TEMP_DIR / filename)
+    # HR recordings are stored in a separate subdirectory
+    target_dir = HR_TEMP_DIR if interview_type == "hr" else TEMP_DIR
+    local_path = str(target_dir / filename)
 
     # Always save locally for testing
     Path(local_path).write_bytes(file_bytes)

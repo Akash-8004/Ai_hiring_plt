@@ -20,7 +20,7 @@ from backend.core.models import JobDescription, ParsedResume
 from backend.core.sample_data import DEFAULT_JOB, SAMPLE_RESUMES
 from backend.live.relay import GeminiLiveRelay
 from backend.services.ai_ranker import AIRankingService
-from backend.services.interview_agent import InterviewAgent
+from backend.services.HR_Round.hr_evaluator import HREvaluator
 from backend.services.Technical.interviewer import get_interviewer_prompt
 from backend.services.Technical.question_processor import QuestionProcessor
 from backend.services.ranking import score_candidates
@@ -41,7 +41,7 @@ app.add_middleware(
 )
 
 ranking_service = AIRankingService()
-interview_agent = InterviewAgent()
+hr_evaluator = HREvaluator()
 technical_evaluator = TechnicalInterviewEvaluator()
 question_processor = QuestionProcessor()
 current_job = database.load_job() or DEFAULT_JOB
@@ -269,7 +269,10 @@ def serve_local_recording(filename: str):
     """Serve a recording file from temp_files/ for local development/testing."""
     safe = Path(filename).name  # prevent path traversal
     project_root = Path(__file__).resolve().parent.parent
-    file_path = project_root / "temp_files" / safe
+    # Check temp_files/hr/ first, then fall back to temp_files/
+    file_path = project_root / "temp_files" / "hr" / safe
+    if not file_path.is_file():
+        file_path = project_root / "temp_files" / safe
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="Recording file not found.")
     return FileResponse(str(file_path), media_type="video/webm", content_disposition_type="inline")
@@ -577,10 +580,12 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
 def _workspace_payload() -> dict[str, Any]:
     results = score_candidates(candidate_resumes, current_job, ranking_service)
     rows = []
-    invited = 0
+    hr_invited = 0
+    hr_interviewed = 0
+    hr_passed = 0
+    tech_invited = 0
     tech_interviewed = 0
     tech_passed = 0
-    hr_interviewed = 0
     hired = 0
 
     for result in results:
@@ -601,14 +606,20 @@ def _workspace_payload() -> dict[str, Any]:
         row["recording"] = (doc.get("technical_interview") or {}).get("recording") or (doc.get("hr_interview") or {}).get("recording")
 
         stage = row["pipelineStage"]
-        if stage in {"invited", "tech_passed", "tech_failed", "hr_failed", "hired"}:
-            invited += 1
-        if stage in {"tech_passed", "tech_failed", "hr_failed", "hired"}:
-            tech_interviewed += 1
-        if stage in {"tech_passed", "hr_failed", "hired"}:
-            tech_passed += 1
-        if stage in {"hr_failed", "hired"}:
+        # HR pipeline stages
+        if stage in {"hr_invited", "hr_passed", "hr_failed", "invited", "tech_passed", "tech_failed", "hired"}:
+            hr_invited += 1
+        if stage in {"hr_passed", "hr_failed", "invited", "tech_passed", "tech_failed", "hired"}:
             hr_interviewed += 1
+        if stage in {"hr_passed", "invited", "tech_passed", "tech_failed", "hired"}:
+            hr_passed += 1
+        # Technical pipeline stages (only after HR passed)
+        if stage in {"invited", "tech_passed", "tech_failed", "hired"}:
+            tech_invited += 1
+        if stage in {"tech_passed", "tech_failed", "hired"}:
+            tech_interviewed += 1
+        if stage in {"tech_passed", "hired"}:
+            tech_passed += 1
         if stage == "hired":
             hired += 1
 
@@ -630,10 +641,12 @@ def _workspace_payload() -> dict[str, Any]:
             "shortlisted": shortlisted,
             "rejected": rejected,
             "averageScore": average,
-            "invited": invited,
+            "hrInvited": hr_invited,
+            "hrInterviewed": hr_interviewed,
+            "hrPassed": hr_passed,
+            "techInvited": tech_invited,
             "techInterviewed": tech_interviewed,
             "techPassed": tech_passed,
-            "hrInterviewed": hr_interviewed,
             "hired": hired,
         },
         "screening": {
@@ -675,10 +688,10 @@ def _run_interview_evaluation(
         if technical_evaluator.last_error:
             result["provider_error"] = technical_evaluator.last_error
     else:
-        result = interview_agent.evaluate_interview(resume.raw_text, transcript)
-        result.setdefault("provider_used", "gemini" if interview_agent.api_key else "local")
-        if interview_agent.last_error:
-            result["provider_error"] = interview_agent.last_error
+        result = hr_evaluator.evaluate(resume.raw_text, transcript)
+        result.setdefault("provider_used", "gemini" if hr_evaluator.api_key else "local")
+        if hr_evaluator.last_error:
+            result["provider_error"] = hr_evaluator.last_error
 
     # Preserve existing recording metadata if the interview doc already has one
     existing_doc = database.get_candidate_doc(email) or {}

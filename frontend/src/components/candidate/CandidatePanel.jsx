@@ -6,10 +6,10 @@ import { CopyButton } from "../common/CopyButton";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 export function CandidatePanel({ candidate, onClose }) {
-  const invitation = candidate.invitation;
-  const techInterview = candidate.technical_interview || {};
   const hrInvitation = candidate.hr_invitation;
   const hrInterview = candidate.hr_interview || {};
+  const invitation = candidate.invitation;
+  const techInterview = candidate.technical_interview || {};
 
   const [videoModal, setVideoModal] = useState(null); // { email, type, label }
   const [videoUrl, setVideoUrl] = useState(null);
@@ -81,6 +81,61 @@ export function CandidatePanel({ candidate, onClose }) {
         </div>
       </section>
 
+      {/* HR Interview Section (first — HR comes before Technical) */}
+      <section>
+        <h3>HR Interview</h3>
+        {hrInvitation?.link ? (
+          <div className="invite-link-row">
+            <span className="invite-link">{hrInvitation.link.replace(/^https?:\/\//, "")}</span>
+            <CopyButton text={hrInvitation.link} />
+          </div>
+        ) : (
+          <p className="muted-cell">No HR interview invitation yet.</p>
+        )}
+        {hrInterview.status === "completed" ? (
+          <div className="interview-summary">
+            <div>
+              <strong>{hrInterview.decision}</strong>
+              <span>HR Score {hrInterview.score}%</span>
+            </div>
+            {hrInterview.evaluation?.feedback ? <p>{hrInterview.evaluation.feedback}</p> : null}
+            {hrInterview.evaluation?.strengths?.length ? (
+              <div className="detail-section">
+                <strong>Strengths:</strong>
+                <span>{hrInterview.evaluation.strengths.join(", ")}</span>
+              </div>
+            ) : null}
+            {hrInterview.evaluation?.areas_for_improvement?.length ? (
+              <div className="detail-section">
+                <strong>Areas for Improvement:</strong>
+                <span>{hrInterview.evaluation.areas_for_improvement.join(", ")}</span>
+              </div>
+            ) : null}
+            {hrInterview.evaluation?.red_flags?.length ? (
+              <div className="detail-section">
+                <strong>Red Flags:</strong>
+                <span>{hrInterview.evaluation.red_flags.join(", ")}</span>
+              </div>
+            ) : null}
+            {hrInterview.evaluation?.recommendation ? (
+              <div className="detail-section">
+                <strong>Recommendation:</strong>
+                <span>{hrInterview.evaluation.recommendation}</span>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {hrInterview.recording ? (
+          <button
+            type="button"
+            className="watch-recording-btn"
+            onClick={() => openRecording(candidate.Email, "hr", "HR Interview")}
+          >
+            <Play size={15} /> Watch Recording
+          </button>
+        ) : null}
+      </section>
+
       {/* Technical Interview Section */}
       <section>
         <h3>Technical Interview</h3>
@@ -124,37 +179,6 @@ export function CandidatePanel({ candidate, onClose }) {
         ) : null}
       </section>
 
-      {/* HR Interview Section */}
-      <section>
-        <h3>HR Interview</h3>
-        {hrInvitation?.link ? (
-          <div className="invite-link-row">
-            <span className="invite-link">{hrInvitation.link.replace(/^https?:\/\//, "")}</span>
-            <CopyButton text={hrInvitation.link} />
-          </div>
-        ) : (
-          <p className="muted-cell">No HR interview invitation yet.</p>
-        )}
-        {hrInterview.status === "completed" ? (
-          <div className="interview-summary">
-            <div>
-              <strong>{hrInterview.decision}</strong>
-              <span>HR Score {hrInterview.score}%</span>
-            </div>
-            {hrInterview.evaluation?.feedback ? <p>{hrInterview.evaluation.feedback}</p> : null}
-          </div>
-        ) : null}
-        {hrInterview.recording ? (
-          <button
-            type="button"
-            className="watch-recording-btn"
-            onClick={() => openRecording(candidate.Email, "hr", "HR Interview")}
-          >
-            <Play size={15} /> Watch Recording
-          </button>
-        ) : null}
-      </section>
-
       {/* Interview Transcript */}
       {candidate.interview_transcript?.length ? (
         <section>
@@ -189,7 +213,7 @@ export function CandidatePanel({ candidate, onClose }) {
             </div>
             <div className="video-modal-body">
               {videoLoading ? (
-                <div className="video-modal-loading">Loading recording…</div>
+                <div className="video-modal-loading">Loading recording...</div>
               ) : videoUrl ? (
                 <video
                   key={videoUrl}

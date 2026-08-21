@@ -1,24 +1,29 @@
 import React from "react";
-import { Loader2, Send } from "lucide-react";
+import { Loader2, Send, UsersRound } from "lucide-react";
 import { PipelineCandidateRow } from "./PipelineCandidateRow";
 
 export function Pipeline({ candidates, onInvite, busy }) {
   const uploaded = candidates.length;
   const shortlisted = candidates.filter((c) => c.Status === "Shortlisted");
-  const invited = candidates.filter((c) => c.invitation?.link);
+  const hrInvited = candidates.filter((c) => c.hr_invitation?.link);
+  const hrDone = candidates.filter((c) => c.hr_interview?.status === "completed");
+  const hrPassed = candidates.filter((c) => c.hr_interview?.decision === "PASS");
+  const techInvited = candidates.filter((c) => c.invitation?.link);
   const techDone = candidates.filter((c) => c.technical_interview?.status === "completed");
   const techPassed = candidates.filter((c) => c.technical_interview?.decision === "PASS");
-  const hrDone = candidates.filter((c) => c.hr_interview?.status === "completed");
-  const hiredList = candidates.filter((c) => c.hr_interview?.decision === "PASS");
-  const invitedEmails = new Set(invited.map((c) => c.Email));
+  const hiredList = candidates.filter((c) => c.technical_interview?.decision === "PASS" && c.hr_interview?.decision === "PASS");
+  const hrInvitedEmails = new Set(hrInvited.map((c) => c.Email));
+  const techInvitedEmails = new Set(techInvited.map((c) => c.Email));
 
   const pipelineStages = [
     ["Uploaded", uploaded],
     ["AI Shortlisted", shortlisted.length],
-    ["Tech Invited", invited.length],
+    ["HR Invited", hrInvited.length],
+    ["HR Interview", hrDone.length],
+    ["HR Passed", hrPassed.length],
+    ["Tech Invited", techInvited.length],
     ["Tech Interview", techDone.length],
     ["Tech Passed", techPassed.length],
-    ["HR Interview", hrDone.length],
     ["Hired", hiredList.length],
   ];
 
@@ -33,31 +38,31 @@ export function Pipeline({ candidates, onInvite, busy }) {
         ))}
       </section>
 
-      {/* Technical Interview Section */}
+      {/* HR Interview Section */}
       <section className="table-section">
         <div className="section-toolbar">
           <div>
-            <h2>Technical Interview</h2>
-            <span>Invite shortlisted candidates to AI technical interview</span>
+            <h2><UsersRound size={18} /> HR Interview</h2>
+            <span>Invite shortlisted candidates to AI HR interview first</span>
           </div>
           <button
             className="primary-button"
             onClick={() => {
               shortlisted
-                .filter((c) => !invitedEmails.has(c.Email))
-                .forEach((c) => onInvite(c.Email, "technical"));
+                .filter((c) => !hrInvitedEmails.has(c.Email))
+                .forEach((c) => onInvite(c.Email, "hr"));
             }}
-            disabled={busy || !shortlisted.filter((c) => !invitedEmails.has(c.Email)).length}
+            disabled={busy || !shortlisted.filter((c) => !hrInvitedEmails.has(c.Email)).length}
           >
             {busy ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
-            Invite for Technical
+            Invite for HR
           </button>
         </div>
         {!candidates.length ? (
           <div className="empty-state">
             <Send size={24} />
             <strong>No candidates yet</strong>
-            <span>Add resumes first, then invite shortlisted candidates to interviews.</span>
+            <span>Add resumes first, then invite shortlisted candidates to HR interviews.</span>
           </div>
         ) : (
           <div className="table-wrap">
@@ -66,9 +71,9 @@ export function Pipeline({ candidates, onInvite, busy }) {
                 <tr>
                   <th>Candidate</th>
                   <th>Resume Score</th>
-                  <th>Technical Invitation</th>
-                  <th>Technical Result</th>
-                  <th>HR Round</th>
+                  <th>HR Invitation</th>
+                  <th>HR Result</th>
+                  <th>Technical Round</th>
                 </tr>
               </thead>
               <tbody>

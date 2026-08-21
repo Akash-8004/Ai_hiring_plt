@@ -8,6 +8,7 @@ import {
   Search,
   Upload,
   UserRoundCheck,
+  UsersRound,
   XCircle,
 } from "lucide-react";
 import { Metric } from "../common/Metric";
@@ -34,7 +35,8 @@ export function Dashboard({
         <Metric icon={UserRoundCheck} label="Shortlisted" value={metrics.shortlisted} tone="green" />
         <Metric icon={XCircle} label="Rejected" value={metrics.rejected} tone="red" />
         <Metric icon={CircleGauge} label="Avg Score" value={`${metrics.averageScore}%`} tone="amber" />
-        <Metric icon={Monitor} label="Tech Interview" value={metrics.techInterviewed || 0} tone="purple" />
+        <Metric icon={UsersRound} label="HR Interviewed" value={metrics.hrInterviewed || 0} tone="blue" />
+        <Metric icon={Monitor} label="Tech Interviewed" value={metrics.techInterviewed || 0} tone="purple" />
         <Metric icon={CheckCircle2} label="Hired" value={metrics.hired || 0} tone="green" />
       </div>
 

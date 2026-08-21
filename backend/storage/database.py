@@ -111,12 +111,12 @@ def set_candidate_invitation(email: str, invitation: dict) -> None:
 def set_candidate_hr_invitation(email: str, invitation: dict) -> None:
     _candidates.update_one(
         {"email": email},
-        {"$set": {"hr_invitation": invitation}},
+        {"$set": {"hr_invitation": invitation, "pipelineStage": "hr_invited"}},
     )
 
 
 def set_candidate_technical_interview(email: str, interview: dict) -> None:
-    stage = "tech_passed" if interview.get("decision") == "PASS" else "tech_failed"
+    stage = "hired" if interview.get("decision") == "PASS" else "tech_failed"
     _candidates.update_one(
         {"email": email},
         {"$set": {"technical_interview": interview, "pipelineStage": stage}},
@@ -124,7 +124,7 @@ def set_candidate_technical_interview(email: str, interview: dict) -> None:
 
 
 def set_candidate_hr_interview(email: str, interview: dict) -> None:
-    stage = "hired" if interview.get("decision") == "PASS" else "hr_failed"
+    stage = "hr_passed" if interview.get("decision") == "PASS" else "hr_failed"
     _candidates.update_one(
         {"email": email},
         {"$set": {"hr_interview": interview, "pipelineStage": stage}},
