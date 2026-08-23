@@ -1295,6 +1295,80 @@ td span {
   transform: translateY(-1px);
 }
 
+/* ── Pre-flight Device Check (instruction page) ────────────────────── */
+
+.device-check-card {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.device-check-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.device-check-header h4 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  color: #111827;
+}
+
+.device-check-header p {
+  margin: 0;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.device-check-btn {
+  justify-self: start;
+}
+
+.device-check-granted {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.device-check-preview {
+  width: 180px;
+  height: 120px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 2px solid #bbf7d0;
+  flex-shrink: 0;
+}
+
+.device-check-preview .camera-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.device-check-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.device-check-status.ok {
+  color: #16a34a;
+  font-weight: 600;
+}
+
+.device-check-status.error {
+  color: #dc2626;
+  flex-wrap: wrap;
+}
+
 /* ── Interview Results Page ────────────────────────────────────────── */
 
 .interview-results {
@@ -2195,6 +2269,81 @@ td span {
 .video-modal-loading {
   color: #64748b;
   font-size: 14px;
+}
+
+/* ── Proctoring warning modal ──────────────────────────────────────── */
+
+.proctoring-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+}
+
+.proctoring-modal {
+  background: #1e1e2e;
+  border: 1px solid #ff4d4f;
+  border-radius: 12px;
+  padding: 32px;
+  max-width: 480px;
+  text-align: center;
+  color: #ffffff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.proctoring-modal-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  background: rgba(255, 77, 79, 0.12);
+  color: #ff4d4f;
+}
+
+.proctoring-modal h2 {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 20px;
+  color: #ff4d4f;
+}
+
+.proctoring-modal-message {
+  font-size: 16px;
+  margin: 16px 0;
+  color: #e0e0e0;
+}
+
+.proctoring-modal-note {
+  font-size: 13px;
+  color: #888888;
+  margin-bottom: 24px;
+}
+
+.proctoring-resume-btn {
+  background: #ff4d4f;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 12px 24px;
+  font-size: 15px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.proctoring-resume-btn:hover {
+  background: #d9363e;
 }
 
 

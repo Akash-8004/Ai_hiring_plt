@@ -36,7 +36,7 @@ function decodePcm(b64) {
   return samples;
 }
 
-export function createLiveClient({ token, onReady, onTranscript, onTurnComplete, onEvaluation, onError, onClosed, onAudioStreaming }) {
+export function createLiveClient({ token, initialStream = null, onReady, onTranscript, onTurnComplete, onEvaluation, onError, onClosed, onAudioStreaming }) {
   let ws = null;
   let audioContext = null;
   let micStream = null;
@@ -185,21 +185,32 @@ export function createLiveClient({ token, onReady, onTranscript, onTurnComplete,
   // ── Capture (mic + camera) ──────────────────────────────────────────
 
   async function startCapture() {
-    // Request both camera and microphone
-    try {
-      cameraStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
+    if (initialStream) {
+      // Stream was already granted during the pre-flight device check on the
+      // instruction page — reuse it so no permission prompt appears now.
+      cameraStream = initialStream;
       micStream = new MediaStream(cameraStream.getAudioTracks());
-    } catch (e) {
-      // Camera denied — fall back to audio-only
-      console.warn("[live] camera access denied, proceeding audio-only:", e.message);
-      cameraStream = null;
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      console.log("[live] reusing pre-granted media stream", {
+        camera: cameraStream.getVideoTracks().length > 0,
+        mic: micStream.getAudioTracks().length > 0,
       });
-    } 
+    } else {
+      // Request both camera and microphone
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        micStream = new MediaStream(cameraStream.getAudioTracks());
+      } catch (e) {
+        // Camera denied — fall back to audio-only
+        console.warn("[live] camera access denied, proceeding audio-only:", e.message);
+        cameraStream = null;
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+      }
+    }
 
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
     if (audioContext.state === "suspended") await audioContext.resume();

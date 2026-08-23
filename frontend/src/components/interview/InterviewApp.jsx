@@ -15,8 +15,11 @@ import {
   VideoOff,
   Volume2,
   XCircle,
+  ShieldAlert,
 } from "lucide-react";
 import { createLiveClient } from "./liveClient";
+import ProctoringWarningModal from "./ProctoringWarningModal";
+import useProctoring from "../../hooks/useProctoring";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
@@ -48,6 +51,11 @@ export function InterviewApp({ token, interviewType }) {
   const [isRecording, setIsRecording] = useState(false);
   const [cameraStream, setCameraStream] = useState(null);
 
+  // Pre-flight device check (instruction page): grant camera+mic before the
+  // interview starts so no permission prompt appears once fullscreen opens.
+  const [deviceCheckStatus, setDeviceCheckStatus] = useState("idle"); // "idle" | "requesting" | "granted" | "denied"
+  const [deviceCheckStream, setDeviceCheckStream] = useState(null);
+
   const liveRef = useRef(null);
   const videoRef = useRef(null);
   const transcriptRef = useRef([]);
@@ -57,6 +65,17 @@ export function InterviewApp({ token, interviewType }) {
   const techPhaseRef = useRef("hidden");
   const activeIndexRef = useRef(0);
   const transcriptListRef = useRef(null);
+
+  // ── Browser proctoring (tab switch / minimize / focus loss / fullscreen) ──
+  // Strike 1 → warning modal; Strike 2 → auto-submit via endInterview().
+  const proctoring = useProctoring({
+    enabled: true,
+    assessmentStarted: phase === "live",
+    onAutoSubmit: () => {
+      console.warn("[proctoring] Strike 2 — auto-submitting interview");
+      endInterview();
+    },
+  });
 
   // Fetch session data
   useEffect(() => {
@@ -172,10 +191,52 @@ export function InterviewApp({ token, interviewType }) {
     }
   }, [token]);
 
+  // ── Pre-flight device check (instruction page) ───────────────────────────
+
+  async function requestDeviceAccess() {
+    setDeviceCheckStatus("requesting");
+    try {
+      // Same constraints the live client uses during the interview.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      setDeviceCheckStream(stream);
+      setDeviceCheckStatus("granted");
+    } catch (err) {
+      // Camera missing/denied — fall back to mic-only so the candidate
+      // without a camera is not dead-ended.
+      console.warn("[device-check] camera+mic request failed:", err.message);
+      try {
+        const audioOnly = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        setDeviceCheckStream(audioOnly);
+        setDeviceCheckStatus("granted");
+      } catch (err2) {
+        console.warn("[device-check] mic-only request failed:", err2.message);
+        setDeviceCheckStatus("denied");
+      }
+    }
+  }
+
+  // Stop pre-check tracks if the candidate leaves before starting the
+  // interview. Once handed to the live client, close() stops them anyway —
+  // track.stop() is idempotent.
+  useEffect(() => {
+    return () => {
+      setDeviceCheckStream((stream) => {
+        if (stream) stream.getTracks().forEach((track) => track.stop());
+        return null;
+      });
+    };
+  }, []);
+
   async function startLive() {
     setIsAudioStreaming(false);
     const client = createLiveClient({
       token,
+      initialStream: deviceCheckStream,
       onReady: () => {
         setIsMicActive(true);
         // Attach camera preview and start recording
@@ -417,11 +478,94 @@ export function InterviewApp({ token, interviewType }) {
               </div>
             ) : null}
 
+            <div className="instructions-note">
+              <ShieldAlert size={18} />
+              <p><strong>Proctoring Rules:</strong> This interview is proctored. It must be completed in <strong>fullscreen mode</strong>, and switching tabs, minimizing the window, or losing window focus is monitored. Your first violation triggers a warning; a second violation will automatically submit your interview.</p>
+            </div>
+
+            {/* ─── Pre-flight Device Check ─── */}
+            <div className="device-check-card">
+              <div className="device-check-header">
+                <div className="instruction-icon blue"><Video size={20} /></div>
+                <div>
+                  <h4>Camera &amp; Microphone Check</h4>
+                  <p>Allow access now so the interview can start instantly in fullscreen — no permission popups afterwards.</p>
+                </div>
+              </div>
+
+              {deviceCheckStatus === "idle" && (
+                <button type="button" className="primary-button device-check-btn" onClick={requestDeviceAccess}>
+                  <Video size={18} />
+                  Allow Camera &amp; Microphone
+                </button>
+              )}
+
+              {deviceCheckStatus === "requesting" && (
+                <div className="device-check-status">
+                  <Loader2 className="spin" size={18} />
+                  <span>Waiting for permission… please accept the browser prompt.</span>
+                </div>
+              )}
+
+              {deviceCheckStatus === "granted" && (
+                <div className="device-check-granted">
+                  <div className="device-check-preview">
+                    {deviceCheckStream && deviceCheckStream.getVideoTracks().length > 0 ? (
+                      <video
+                        ref={(el) => {
+                          if (el && deviceCheckStream && el.srcObject !== deviceCheckStream) {
+                            el.srcObject = deviceCheckStream;
+                            el.play().catch(() => {});
+                          }
+                        }}
+                        className="camera-preview"
+                        autoPlay
+                        muted
+                        playsInline
+                      />
+                    ) : (
+                      <div className="camera-preview camera-placeholder">
+                        <Mic size={28} />
+                      </div>
+                    )}
+                  </div>
+                  <div className="device-check-status ok">
+                    <CheckCircle2 size={18} />
+                    <span>
+                      {deviceCheckStream && deviceCheckStream.getVideoTracks().length > 0
+                        ? "Camera & microphone ready."
+                        : "Microphone ready (no camera detected)."}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {deviceCheckStatus === "denied" && (
+                <div className="device-check-status error">
+                  <XCircle size={18} />
+                  <span>
+                    Access was blocked. Enable camera &amp; microphone for this site in your browser settings, then try again.
+                  </span>
+                  <button type="button" className="secondary-button small" onClick={requestDeviceAccess}>
+                    Try Again
+                  </button>
+                </div>
+              )}
+            </div>
+
             <div className="start-section">
               <h3>Ready to Begin?</h3>
-              <p>When you click Start Interview, your camera and microphone will be activated and the AI interviewer will begin the conversation.</p>
+              {deviceCheckStatus === "granted" ? (
+                <p>You're all set. Clicking Start will enter fullscreen and begin the interview immediately.</p>
+              ) : (
+                <p>First allow your camera and microphone above. When you click Start Interview, fullscreen will open and the AI interviewer will begin the conversation.</p>
+              )}
               <p className="recording-notice"><Video size={15} /> This interview will be recorded for quality and evaluation purposes.</p>
-              <button className="primary-button start-btn" onClick={startInterview}>
+              <button
+                className="primary-button start-btn"
+                onClick={startInterview}
+                disabled={deviceCheckStatus !== "granted"}
+              >
                 <Video size={19} />
                 Start {typeLabel} Interview
               </button>
@@ -628,6 +772,8 @@ export function InterviewApp({ token, interviewType }) {
             </div>
           </div>
         )}
+        {/* ─── Proctoring warning modal (Strike 1) ─── */}
+        <ProctoringWarningModal activeWarning={proctoring.activeWarning} onResume={proctoring.dismissWarning} />
       </div>
     </div>
   );
