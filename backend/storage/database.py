@@ -27,7 +27,14 @@ _audit_log = _db["audit_log"]
 
 # ── Indexes ─────────────────────────────────────────────────────────────────
 try:
-    _candidates.create_index("email", unique=True)
+    # Legacy builds put a GLOBAL unique index on candidate email, which breaks
+    # multi-tenancy (two companies can't hold the same candidate). Drop it and
+    # replace with a per-company compound unique index.
+    try:
+        _candidates.drop_index("email_1")
+    except Exception:
+        pass  # Index may not exist on fresh databases.
+    _candidates.create_index([("company_id", 1), ("email", 1)], unique=True)
     _candidates.create_index("company_id")
     _users.create_index("email", unique=True)
     _companies.create_index("slug", unique=True)
@@ -67,11 +74,6 @@ def update_user_session(
     refresh_token: str | None,
     last_login: datetime | None = None,
 ) -> None:
-    updates: dict = {"active_session_token": refresh_token}
-    if last_login:
-        updates["last_login"] = last_login
-        updates["$inc"] = {"login_count": 1}  # handled separately below
-
     if last_login:
         _users.update_one(
             {"_id": ObjectId(user_id)},
@@ -168,7 +170,12 @@ def query_audit_log(filters: dict, page: int = 1, limit: int = 50) -> dict:
     query: dict = {}
 
     if filters.get("company_id"):
-        query["company_id"] = filters["company_id"]
+        # Audit entries store company_id as an ObjectId (see log_activity), so a
+        # raw string filter never matches. Coerce, falling back to the raw value.
+        try:
+            query["company_id"] = ObjectId(filters["company_id"])
+        except Exception:
+            query["company_id"] = filters["company_id"]
     if filters.get("actor_id"):
         query["actor_id"] = filters["actor_id"]
     if filters.get("category"):
@@ -286,6 +293,18 @@ def save_job(job: JobDescription, company_id: str | None = None) -> None:
 # CANDIDATES — tenant-scoped
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _candidate_filter(email: str, company_id: str | None = None) -> dict:
+    """Build a candidate lookup filter, scoped to a company when known.
+
+    Candidate email is unique *per company* (compound index), so callers that
+    know the tenant must pass `company_id` to avoid touching another tenant's
+    candidate. Callers without it (legacy/global paths) fall back to email-only.
+    """
+    if company_id:
+        return {"company_id": company_id, "email": email}
+    return {"email": email}
+
+
 def load_candidates(company_id: str | None = None) -> list[ParsedResume]:
     resumes = []
     valid_fields = {
@@ -327,7 +346,7 @@ def upsert_candidate(
     doc["pipelineStage"] = pipeline_stage
     if company_id:
         doc["company_id"] = company_id
-    _candidates.replace_one({"email": resume.email}, doc, upsert=True)
+    _candidates.replace_one(_candidate_filter(resume.email, company_id), doc, upsert=True)
 
 
 def clear_candidates(company_id: str | None = None) -> None:
@@ -337,54 +356,65 @@ def clear_candidates(company_id: str | None = None) -> None:
         _candidates.delete_many({})
 
 
-def get_candidate_doc(email: str) -> dict | None:
-    doc = _candidates.find_one({"email": email})
+def get_candidate_doc(email: str, company_id: str | None = None) -> dict | None:
+    doc = _candidates.find_one(_candidate_filter(email, company_id))
     if not doc:
         return None
     doc.pop("_id", None)
     return doc
 
 
-def set_candidate_invitation(email: str, invitation: dict) -> None:
+def set_candidate_invitation(email: str, invitation: dict, company_id: str | None = None) -> None:
     _candidates.update_one(
-        {"email": email},
+        _candidate_filter(email, company_id),
         {"$set": {"invitation": invitation, "pipelineStage": "invited"}},
     )
 
 
-def set_candidate_hr_invitation(email: str, invitation: dict) -> None:
+def set_candidate_hr_invitation(email: str, invitation: dict, company_id: str | None = None) -> None:
     _candidates.update_one(
-        {"email": email},
+        _candidate_filter(email, company_id),
         {"$set": {"hr_invitation": invitation, "pipelineStage": "hr_invited"}},
     )
 
 
-def set_candidate_technical_interview(email: str, interview: dict) -> None:
+def set_candidate_technical_interview(email: str, interview: dict, company_id: str | None = None) -> None:
     stage = "hired" if interview.get("decision") == "PASS" else "tech_failed"
     _candidates.update_one(
-        {"email": email},
+        _candidate_filter(email, company_id),
         {"$set": {"technical_interview": interview, "pipelineStage": stage}},
     )
 
 
-def set_candidate_hr_interview(email: str, interview: dict) -> None:
+def set_candidate_hr_interview(email: str, interview: dict, company_id: str | None = None) -> None:
     stage = "hr_passed" if interview.get("decision") == "PASS" else "hr_failed"
     _candidates.update_one(
-        {"email": email},
+        _candidate_filter(email, company_id),
         {"$set": {"hr_interview": interview, "pipelineStage": stage}},
     )
 
 
-def set_candidate_interview_recording(email: str, interview_type: str, recording_meta: dict) -> None:
+def set_candidate_interview_recording(
+    email: str,
+    interview_type: str,
+    recording_meta: dict,
+    company_id: str | None = None,
+) -> None:
     """Persist recording metadata inside the interview document."""
     field = f"{interview_type}_interview"
     _candidates.update_one(
-        {"email": email},
+        _candidate_filter(email, company_id),
         {"$set": {f"{field}.recording": recording_meta}},
     )
 
 
-def append_transcript_turn(email: str, role: str, text: str, extra: dict | None = None) -> None:
+def append_transcript_turn(
+    email: str,
+    role: str,
+    text: str,
+    extra: dict | None = None,
+    company_id: str | None = None,
+) -> None:
     """Persist one interview turn as it happens so a closed tab never loses it.
     `extra` can carry metadata such as `type` ("written") or the `question`
     a typed answer was replying to."""
@@ -399,6 +429,6 @@ def append_transcript_turn(email: str, role: str, text: str, extra: dict | None 
     if extra:
         turn.update(extra)
     _candidates.update_one(
-        {"email": email},
+        _candidate_filter(email, company_id),
         {"$push": {"interview_transcript": turn}},
     )

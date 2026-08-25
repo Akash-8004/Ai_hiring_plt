@@ -44,7 +44,10 @@ app = FastAPI(title="AI Hiring Platform API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
+    # Explicit origins for the canonical dev port; the regex additionally allows
+    # any localhost port so login still works when Vite falls back to 5174/5175/…
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -304,9 +307,9 @@ def invite_candidate(
     }
     # Store under the right invitation key
     if interview_type == "hr":
-        database.set_candidate_hr_invitation(email, invitation)
+        database.set_candidate_hr_invitation(email, invitation, company_id)
     else:
-        database.set_candidate_invitation(email, invitation)
+        database.set_candidate_invitation(email, invitation, company_id)
     log_activity(
         action=f"candidate.invited_{interview_type}",
         category="candidate",
@@ -325,22 +328,21 @@ def invite_candidate(
 @app.get("/api/interview/session/{token}")
 def interview_session(token: str) -> dict[str, Any]:
     """Public endpoint — candidates access via invitation token, no auth needed."""
-    email = _email_for_token(token)
+    email, company_id = _candidate_ref_for_token(token)
     if not email:
         raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
 
-    candidate_doc = database.get_candidate_doc(email)
+    candidate_doc = database.get_candidate_doc(email, company_id)
     if not candidate_doc:
         raise HTTPException(status_code=404, detail="Candidate not found.")
 
     # Load resume from DB
-    candidates = database.load_candidates(candidate_doc.get("company_id"))
+    candidates = database.load_candidates(company_id)
     resume = next((c for c in candidates if c.email == email), None)
     if not resume:
         raise HTTPException(status_code=404, detail="Candidate not found.")
 
     # Load company job
-    company_id = candidate_doc.get("company_id")
     current_job = database.load_job(company_id) or DEFAULT_JOB
 
     # Determine interview type from the invitation
@@ -389,17 +391,15 @@ def interview_session(token: str) -> dict[str, Any]:
 @app.post("/api/interview/evaluate")
 def evaluate_interview(payload: EvaluationPayload) -> dict[str, Any]:
     """Public endpoint — called by interview UI after interview completes."""
-    email = _email_for_token(payload.token)
+    email, company_id = _candidate_ref_for_token(payload.token)
     if not email:
         raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
-    candidate_doc = database.get_candidate_doc(email)
-    company_id = candidate_doc.get("company_id") if candidate_doc else None
     candidates = database.load_candidates(company_id)
     resume = next((c for c in candidates if c.email == email), None)
     if not resume:
         raise HTTPException(status_code=404, detail="Candidate not found.")
     current_job = database.load_job(company_id) or DEFAULT_JOB
-    return _run_interview_evaluation(email, resume, payload.interview_type, payload.transcript, current_job)
+    return _run_interview_evaluation(email, resume, payload.interview_type, payload.transcript, current_job, company_id)
 
 
 # ── Recording Upload & Playback ────────────────────────────────────────────
@@ -411,7 +411,7 @@ async def upload_recording(
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
     """Receive the browser-recorded WebM, persist to R2 + temp_files."""
-    email = _email_for_token(token)
+    email, company_id = _candidate_ref_for_token(token)
     if not email:
         raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
 
@@ -422,7 +422,7 @@ async def upload_recording(
     recording_meta = await asyncio.to_thread(
         r2_storage.upload_recording, email, interview_type, file_bytes
     )
-    database.set_candidate_interview_recording(email, interview_type, recording_meta)
+    database.set_candidate_interview_recording(email, interview_type, recording_meta, company_id)
     return {"ok": True, "recording": recording_meta}
 
 
@@ -447,7 +447,8 @@ def get_recording_url(
     user: dict = Depends(require_authenticated),
 ) -> dict[str, Any]:
     """Return a presigned URL (or local path) so HR can play the recording."""
-    doc = database.get_candidate_doc(email)
+    company_id = str(user["company_id"]) if user.get("company_id") else None
+    doc = database.get_candidate_doc(email, company_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Candidate not found.")
 
@@ -513,14 +514,13 @@ def _interview_is_complete(transcript: list[dict]) -> bool:
 async def interview_live_ws(websocket: WebSocket, token: str) -> None:
     await websocket.accept()
 
-    email = _email_for_token(token)
+    email, company_id = _candidate_ref_for_token(token)
     if not email:
         await websocket.send_json({"type": "error", "message": "Invitation not found or invalid."})
         await websocket.close()
         return
 
-    candidate_doc = database.get_candidate_doc(email)
-    company_id = candidate_doc.get("company_id") if candidate_doc else None
+    candidate_doc = database.get_candidate_doc(email, company_id)
     candidates = database.load_candidates(company_id)
     resume = next((c for c in candidates if c.email == email), None)
     if not resume:
@@ -557,14 +557,14 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
         text = " ".join(user_buffer).strip()
         if text:
             transcript.append({"role": "candidate", "content": text})
-            database.append_transcript_turn(email, "candidate", text)
+            database.append_transcript_turn(email, "candidate", text, company_id=company_id)
         user_buffer.clear()
 
     def flush_model_turn() -> None:
         text = " ".join(model_buffer).strip()
         if text:
             transcript.append({"role": "interviewer", "content": text})
-            database.append_transcript_turn(email, "interviewer", text)
+            database.append_transcript_turn(email, "interviewer", text, company_id=company_id)
         model_buffer.clear()
 
     async def send_ws(payload: dict) -> None:
@@ -604,6 +604,7 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
                             "candidate",
                             answer_text,
                             {"type": "written", "question": question},
+                            company_id=company_id,
                         )
                         await to_gemini.put(
                             (
@@ -707,7 +708,7 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
                 await send_ws({"type": "turn_complete"})
                 if _interview_is_complete(transcript):
                     result = await asyncio.to_thread(
-                        _run_interview_evaluation, email, resume, interview_type, list(transcript), current_job
+                        _run_interview_evaluation, email, resume, interview_type, list(transcript), current_job, company_id
                     )
                     await send_ws({"type": "evaluation", "result": result})
                     done.set()
@@ -772,7 +773,7 @@ def _workspace_payload(company_id: str | None = None, user: dict | None = None) 
         row["github"] = result.candidate.github
         row["breakdown"] = result.score.breakdown
         row["uploadedAt"] = result.candidate.uploaded_at.isoformat()
-        doc = database.get_candidate_doc(result.candidate.email) or {}
+        doc = database.get_candidate_doc(result.candidate.email, company_id) or {}
         row["pipelineStage"] = doc.get("pipelineStage", "uploaded")
         row["invitation"] = doc.get("invitation")
         row["hr_invitation"] = doc.get("hr_invitation")
@@ -863,7 +864,7 @@ def _sanitized_questions(custom_questions: list[dict]) -> list[dict]:
 
 def _run_interview_evaluation(
     email: str, resume: ParsedResume, interview_type: str, transcript: list[dict],
-    current_job: JobDescription | None = None,
+    current_job: JobDescription | None = None, company_id: str | None = None,
 ) -> dict[str, Any]:
     """Score an interview transcript and persist the result + pipeline stage."""
     if interview_type == "technical":
@@ -878,7 +879,7 @@ def _run_interview_evaluation(
             result["provider_error"] = hr_evaluator.last_error
 
     # Preserve existing recording metadata if the interview doc already has one
-    existing_doc = database.get_candidate_doc(email) or {}
+    existing_doc = database.get_candidate_doc(email, company_id) or {}
     existing_interview = existing_doc.get(
         "technical_interview" if interview_type == "technical" else "hr_interview"
     ) or {}
@@ -896,24 +897,35 @@ def _run_interview_evaluation(
         interview["recording"] = recording
 
     if interview_type == "technical":
-        database.set_candidate_technical_interview(email, interview)
+        database.set_candidate_technical_interview(email, interview, company_id)
     else:
-        database.set_candidate_hr_interview(email, interview)
+        database.set_candidate_hr_interview(email, interview, company_id)
 
     return {"email": email, "interview_type": interview_type, **result}
 
 
-def _email_for_token(token: str) -> str | None:
-    """Find candidate email by interview token. Searches all candidates."""
+def _candidate_ref_for_token(token: str) -> tuple[str | None, str | None]:
+    """Resolve (email, company_id) from a globally-unique interview token.
+
+    Public interview endpoints have no authenticated user, so the token is the
+    only tenant signal. Returning company_id lets callers scope every candidate
+    read/write to the owning company.
+    """
     if not token:
-        return None
-    # Search across all candidates (token is globally unique)
-    for doc in database._candidates.find(
+        return None, None
+    doc = database._candidates.find_one(
         {"$or": [{"invitation.token": token}, {"hr_invitation.token": token}]},
-        {"email": 1},
-    ):
-        return doc.get("email")
-    return None
+        {"email": 1, "company_id": 1},
+    )
+    if not doc:
+        return None, None
+    return doc.get("email"), doc.get("company_id")
+
+
+def _email_for_token(token: str) -> str | None:
+    """Find candidate email by interview token (email-only convenience wrapper)."""
+    email, _ = _candidate_ref_for_token(token)
+    return email
 
 
 def _parse_uploaded_bytes(file_name: str, contents: bytes) -> ParsedResume:

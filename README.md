@@ -1,12 +1,16 @@
-# AI Hiring Platform SaaS Template
+# AI Hiring Platform
 
-This is a runnable first template for the AI Hiring Platform described in `AI_Hiring_Platform_TDD (1).docx`.
+## Current scope
 
-Current scope:
-
+- **Multi-tenant SaaS authentication** — Super Admin → Company Admin → sub-users (HR / Interviewers), JWT sessions
+- **Self-service team management** — company admins add their own staff up to a plan seat cap (no super-admin approval)
+- **Plan tiers** — Starter (5 users / 3 jobs), Growth (15 / 10), Enterprise (50 / 50)
+- **Tenant isolation** — every company's candidates, jobs, and users are scoped by `company_id`
+- **Super Admin control center** — onboard companies, manage users, platform KPIs, full audit trail
+- **Audit log** — every auth / user / company action recorded, filterable per company
 - Modern React SaaS dashboard
 - Python FastAPI backend
-- Company/HR demo workspace
+- Company/HR workspace
 - Job description setup by HR
 - Resume upload placeholder for TXT, PDF, and DOCX
 - AI shortlisting placeholder with scoring dimensions
@@ -47,6 +51,29 @@ cd frontend
 cmd /c npm install
 ```
 
+## Authentication & Multi-Tenancy
+
+The platform is a multi-tenant SaaS with three roles:
+
+- **Super Admin** — platform owner. Onboards client companies, manages all users, views platform KPIs and the full audit trail. Seeded automatically on first backend startup.
+- **Company Admin** — created when a company is onboarded. Manages their own team and hiring pipeline, and adds sub-users directly up to their plan's seat cap — with **no** super-admin approval.
+- **Sub-user (HR / Interviewer)** — scoped permissions (conduct interviews, view pipeline, manage resumes).
+
+On first startup the backend seeds a Super Admin from these `.env` variables (defaults shown):
+
+```env
+SUPER_ADMIN_EMAIL=admin@aihiring.com
+SUPER_ADMIN_PASSWORD=change_me
+JWT_SECRET_KEY=replace_with_a_long_random_string
+JWT_ALGORITHM=HS256
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=30
+JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
+```
+
+Log in at `http://localhost:5173` as the Super Admin, onboard a company (which creates its Company Admin), then hand those credentials to the company. All candidate, job, and user data is isolated per company via `company_id`.
+
+> Set a strong `JWT_SECRET_KEY` and `SUPER_ADMIN_PASSWORD` in every deployment — the code defaults are placeholders for local dev only.
+
 ## Gemini Resume Screening
 
 The current ranker uses Gemini first when these variables are available in `.env`:
@@ -76,7 +103,24 @@ If Gemini is unavailable, the backend falls back to a deterministic local scorin
 
 The file `backend/services/ai_ranker.py` contains `AIRankingService`.
 
-The React app calls FastAPI endpoints under `backend/main.py`:
+The React app calls FastAPI endpoints under `backend/main.py` (workspace/interviews) plus the auth and admin routers:
+
+Auth (`/api/auth`):
+
+- `POST /login` · `POST /refresh` · `POST /logout` · `GET /me` · `POST /change-password`
+
+Super Admin (`/api/admin`):
+
+- `GET /stats`
+- `GET|POST /companies` · `GET|PUT /companies/{id}` · `POST /companies/{id}/suspend|activate`
+- `GET /companies/{id}/users` · `GET /companies/{id}/activity`
+- `GET /users` · `POST /users/{id}/suspend|activate` · `GET /audit-log`
+
+Company Admin (`/api/company`):
+
+- `GET|POST /team` · `POST /team/{id}/suspend|activate`
+
+Workspace & interviews:
 
 - `GET /api/workspace`
 - `PUT /api/job`
@@ -120,14 +164,19 @@ GEMINI_LIVE_VOICE=Puck
 backend/
   main.py                 # FastAPI app: routes + live WebSocket relay wiring
   config.py               # loads .env once for every module
+  auth/                   # JWT security, login/refresh routes, super-admin seed
+  admin/                  # super-admin + company-admin routes (companies, team, audit)
   core/                   # shared data models + seed data
   services/               # business logic (ranking, parsing, interviews, prompts)
-  storage/                # MongoDB persistence layer
+  storage/                # MongoDB persistence layer (tenant-scoped by company_id)
   live/                   # Gemini Live relay (server-side API key)
 frontend/
   src/
     main.jsx              # app entry; routes views and the interview page
     components/
+      auth/               # AuthProvider + LoginPage
+      admin/              # SuperAdminDashboard (KPIs, companies, users, audit log)
+      team/               # company team management + add-member modal
       layout/             # Sidebar, Topbar
       dashboard/          # Dashboard + candidate table
       job/                # Job setup editor
@@ -144,5 +193,6 @@ frontend/
 1. Replace in-memory state with PostgreSQL tables from the TDD.
 2. Add real PDF/DOCX extraction libraries for production parsing.
 3. Move ranking to FastAPI background jobs.
-4. Add company authentication and tenant isolation.
+4. ✅ Company authentication & tenant isolation — **done** (multi-tenant auth, roles, plan seat limits, audit log).
 5. Add session resumption for Live sessions longer than the ~10 minute connection limit.
+6. Self-service plan upgrades / billing (today the Super Admin adjusts a company's plan limits).
