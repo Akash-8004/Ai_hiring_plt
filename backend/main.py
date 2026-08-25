@@ -3,6 +3,7 @@ import asyncio
 import base64
 import json
 import math
+import os
 import secrets
 import time
 from dataclasses import asdict
@@ -11,7 +12,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -28,9 +29,18 @@ from backend.services.resume_parser import parse_resume_text, parse_uploaded_res
 from backend.services.Technical.technical_evaluator import TechnicalInterviewEvaluator
 from backend.services import r2_storage
 from backend.storage import database
+from backend.auth.security import (
+    get_current_user,
+    hash_password,
+    log_activity,
+    require_authenticated,
+    require_company_admin,
+)
+from backend.auth.routes import router as auth_router
+from backend.admin.routes import admin_router, company_router
 
 
-app = FastAPI(title="AI Hiring Platform API", version="0.1.0")
+app = FastAPI(title="AI Hiring Platform API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,13 +50,68 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Register auth & admin routers ───────────────────────────────────────────
+app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(company_router)
+
+# ── Shared services (stateless, safe to share) ─────────────────────────────
 ranking_service = AIRankingService()
 hr_evaluator = HREvaluator()
 technical_evaluator = TechnicalInterviewEvaluator()
 question_processor = QuestionProcessor()
-current_job = database.load_job() or DEFAULT_JOB
-candidate_resumes: list[ParsedResume] = database.load_candidates()
 
+
+# ── Startup: seed Super Admin ──────────────────────────────────────────────
+
+@app.on_event("startup")
+def seed_super_admin():
+    """Create the initial Super Admin from .env if none exists."""
+    if database.count_super_admins() > 0:
+        return  # Already seeded
+
+    email = os.getenv("SUPER_ADMIN_EMAIL", "admin@aihiring.com")
+    password = os.getenv("SUPER_ADMIN_PASSWORD", "Admin@123456")
+
+    if database.get_user_by_email(email):
+        return  # Email already taken
+
+    database.insert_user({
+        "email": email,
+        "password_hash": hash_password(password),
+        "full_name": "Super Admin",
+        "role": "super_admin",
+        "company_id": None,
+        "status": "active",
+        "permissions": ["*"],
+        "created_by": "system",
+        "created_at": datetime.now(timezone.utc),
+        "last_login": None,
+        "login_count": 0,
+        "active_session_token": None,
+    })
+    print(f"[OK] Super Admin seeded: {email}")
+
+    # Log the seeding event
+    database.insert_audit_log({
+        "actor_id": "system",
+        "actor_email": email,
+        "actor_role": "super_admin",
+        "company_id": None,
+        "action": "system.super_admin_seeded",
+        "category": "system",
+        "severity": "info",
+        "target_type": "user",
+        "target_id": None,
+        "target_label": f"Super Admin ({email})",
+        "metadata": {},
+        "ip_address": None,
+        "user_agent": None,
+        "timestamp": datetime.now(timezone.utc),
+    })
+
+
+# ── Pydantic Models ────────────────────────────────────────────────────────
 
 class JobPayload(BaseModel):
     title: str
@@ -76,26 +141,46 @@ class EvaluationPayload(BaseModel):
     interview_type: str = "hr"
 
 
+# ── Health (no auth) ───────────────────────────────────────────────────────
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# ── Workspace (authenticated, scoped to company) ──────────────────────────
+
 @app.get("/api/workspace")
-def workspace() -> dict[str, Any]:
-    return _workspace_payload()
+def workspace(user: dict = Depends(require_authenticated)) -> dict[str, Any]:
+    company_id = str(user["company_id"]) if user.get("company_id") else None
+    return _workspace_payload(company_id, user)
 
 
 @app.put("/api/job")
-def update_job(payload: JobPayload) -> dict[str, Any]:
-    global current_job
-    current_job = JobDescription(**payload.model_dump())
-    database.save_job(current_job)
-    return _workspace_payload()
+def update_job(
+    payload: JobPayload,
+    user: dict = Depends(require_company_admin),
+    request: Request = None,
+) -> dict[str, Any]:
+    company_id = str(user["company_id"]) if user.get("company_id") else None
+    job = JobDescription(**payload.model_dump())
+    database.save_job(job, company_id)
+    log_activity(
+        action="job.updated",
+        category="job",
+        actor=user,
+        target_type="job",
+        target_label=job.title,
+        request=request,
+    )
+    return _workspace_payload(company_id, user)
 
 
 @app.post("/api/job/questions/process")
-async def process_questions_file(file: UploadFile = File(...)) -> dict[str, Any]:
+async def process_questions_file(
+    file: UploadFile = File(...),
+    user: dict = Depends(require_authenticated),
+) -> dict[str, Any]:
     """Restructure HR-supplied coding questions from an uploaded PDF/DOCX/TXT."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="A file is required.")
@@ -108,7 +193,10 @@ async def process_questions_file(file: UploadFile = File(...)) -> dict[str, Any]
 
 
 @app.post("/api/job/questions/process-text")
-def process_questions_text(payload: ProcessQuestionsPayload) -> dict[str, Any]:
+def process_questions_text(
+    payload: ProcessQuestionsPayload,
+    user: dict = Depends(require_authenticated),
+) -> dict[str, Any]:
     """Restructure HR-supplied coding questions from manually pasted text."""
     if not payload.text.strip():
         raise HTTPException(status_code=400, detail="Question text is required.")
@@ -121,48 +209,91 @@ def process_questions_text(payload: ProcessQuestionsPayload) -> dict[str, Any]:
 
 
 @app.post("/api/resumes/manual")
-def add_manual_resume(payload: ManualResumePayload) -> dict[str, Any]:
+def add_manual_resume(
+    payload: ManualResumePayload,
+    user: dict = Depends(require_authenticated),
+    request: Request = None,
+) -> dict[str, Any]:
     if not payload.text.strip():
         raise HTTPException(status_code=400, detail="Resume text is required.")
+    company_id = str(user["company_id"]) if user.get("company_id") else None
     resume = parse_resume_text(payload.file_name, payload.text)
-    candidate_resumes.append(resume)
-    database.upsert_candidate(resume)
-    return _workspace_payload()
+    database.upsert_candidate(resume, company_id=company_id)
+    log_activity(
+        action="candidate.uploaded",
+        category="candidate",
+        actor=user,
+        target_type="candidate",
+        target_label=f"{resume.full_name} ({resume.email})",
+        request=request,
+    )
+    return _workspace_payload(company_id, user)
 
 
 @app.post("/api/resumes/upload")
-async def upload_resumes(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+async def upload_resumes(
+    files: list[UploadFile] = File(...),
+    user: dict = Depends(require_authenticated),
+    request: Request = None,
+) -> dict[str, Any]:
+    company_id = str(user["company_id"]) if user.get("company_id") else None
+    file_names = []
     for file in files:
         resume = _parse_uploaded_bytes(file.filename or "resume.txt", await file.read())
-        candidate_resumes.append(resume)
-        database.upsert_candidate(resume)
-    return _workspace_payload()
+        database.upsert_candidate(resume, company_id=company_id)
+        file_names.append(file.filename)
+    log_activity(
+        action="candidate.bulk_uploaded",
+        category="candidate",
+        actor=user,
+        metadata={"count": len(files), "file_names": file_names},
+        request=request,
+    )
+    return _workspace_payload(company_id, user)
 
 
 @app.post("/api/resumes/sample")
-def load_sample_resumes() -> dict[str, Any]:
-    candidate_resumes.clear()
-    database.clear_candidates()
+def load_sample_resumes(
+    user: dict = Depends(require_authenticated),
+) -> dict[str, Any]:
+    company_id = str(user["company_id"]) if user.get("company_id") else None
+    database.clear_candidates(company_id)
     for index, text in enumerate(SAMPLE_RESUMES):
         resume = parse_resume_text(f"sample_resume_{index + 1}.txt", text)
-        candidate_resumes.append(resume)
-        database.upsert_candidate(resume)
-    return _workspace_payload()
+        database.upsert_candidate(resume, company_id=company_id)
+    return _workspace_payload(company_id, user)
 
 
 @app.delete("/api/resumes")
-def clear_resumes() -> dict[str, Any]:
-    candidate_resumes.clear()
-    database.clear_candidates()
-    return _workspace_payload()
+def clear_resumes(
+    user: dict = Depends(require_company_admin),
+    request: Request = None,
+) -> dict[str, Any]:
+    company_id = str(user["company_id"]) if user.get("company_id") else None
+    database.clear_candidates(company_id)
+    log_activity(
+        action="candidate.all_cleared",
+        category="candidate",
+        actor=user,
+        severity="critical",
+        request=request,
+    )
+    return _workspace_payload(company_id, user)
 
 
 # ── Invitation ──────────────────────────────────────────────────────────────
 
 @app.post("/api/candidates/{email}/invite")
-def invite_candidate(email: str, interview_type: str = "technical") -> dict[str, Any]:
+def invite_candidate(
+    email: str,
+    interview_type: str = "technical",
+    user: dict = Depends(require_authenticated),
+    request: Request = None,
+) -> dict[str, Any]:
     """Generate an interview invitation link. interview_type can be 'technical' or 'hr'."""
-    if not any(c.email == email for c in candidate_resumes):
+    company_id = str(user["company_id"]) if user.get("company_id") else None
+    candidates = database.load_candidates(company_id)
+    if not any(c.email == email for c in candidates):
         raise HTTPException(status_code=404, detail="Candidate not found.")
     token = secrets.token_urlsafe(12)
     invitation = {
@@ -176,43 +307,69 @@ def invite_candidate(email: str, interview_type: str = "technical") -> dict[str,
         database.set_candidate_hr_invitation(email, invitation)
     else:
         database.set_candidate_invitation(email, invitation)
-    return _workspace_payload()
+    log_activity(
+        action=f"candidate.invited_{interview_type}",
+        category="candidate",
+        actor=user,
+        target_type="candidate",
+        target_id=email,
+        target_label=email,
+        metadata={"interview_type": interview_type},
+        request=request,
+    )
+    return _workspace_payload(company_id, user)
 
 
-# ── Interview Session ───────────────────────────────────────────────────────
+# ── Interview Session (token-based, no login required) ─────────────────────
 
 @app.get("/api/interview/session/{token}")
 def interview_session(token: str) -> dict[str, Any]:
+    """Public endpoint — candidates access via invitation token, no auth needed."""
     email = _email_for_token(token)
     if not email:
         raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
-    resume = next((c for c in candidate_resumes if c.email == email), None)
+
+    candidate_doc = database.get_candidate_doc(email)
+    if not candidate_doc:
+        raise HTTPException(status_code=404, detail="Candidate not found.")
+
+    # Load resume from DB
+    candidates = database.load_candidates(candidate_doc.get("company_id"))
+    resume = next((c for c in candidates if c.email == email), None)
     if not resume:
         raise HTTPException(status_code=404, detail="Candidate not found.")
 
-    doc = database.get_candidate_doc(email) or {}
+    # Load company job
+    company_id = candidate_doc.get("company_id")
+    current_job = database.load_job(company_id) or DEFAULT_JOB
 
     # Determine interview type from the invitation
-    invitation = doc.get("invitation") or {}
-    hr_invitation = doc.get("hr_invitation") or {}
+    invitation = candidate_doc.get("invitation") or {}
+    hr_invitation = candidate_doc.get("hr_invitation") or {}
     if invitation.get("token") == token:
         interview_type = invitation.get("type", "technical")
-        interview_data = doc.get("technical_interview") or {}
+        interview_data = candidate_doc.get("technical_interview") or {}
     elif hr_invitation.get("token") == token:
         interview_type = "hr"
-        interview_data = doc.get("hr_interview") or doc.get("interview") or {}
+        interview_data = candidate_doc.get("hr_interview") or candidate_doc.get("interview") or {}
     else:
         interview_type = "technical"
         interview_data = {}
 
-    # Build appropriate system prompt
+    # Load company name for branding
+    company_name = "AI Hiring Platform"
+    if company_id:
+        company = database.get_company_by_id(str(company_id))
+        if company:
+            company_name = company.get("settings", {}).get("interview_branding_name", company.get("name", company_name))
+
     system_prompt = get_interviewer_prompt(interview_type, current_job, resume)
 
     return {
         "token": token,
         "candidateName": resume.full_name,
         "jobTitle": current_job.title,
-        "companyName": "Acme Talent Labs",
+        "companyName": company_name,
         "resumeText": resume.raw_text,
         "interviewType": interview_type,
         "systemPrompt": system_prompt,
@@ -231,13 +388,18 @@ def interview_session(token: str) -> dict[str, Any]:
 
 @app.post("/api/interview/evaluate")
 def evaluate_interview(payload: EvaluationPayload) -> dict[str, Any]:
+    """Public endpoint — called by interview UI after interview completes."""
     email = _email_for_token(payload.token)
     if not email:
         raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
-    resume = next((c for c in candidate_resumes if c.email == email), None)
+    candidate_doc = database.get_candidate_doc(email)
+    company_id = candidate_doc.get("company_id") if candidate_doc else None
+    candidates = database.load_candidates(company_id)
+    resume = next((c for c in candidates if c.email == email), None)
     if not resume:
         raise HTTPException(status_code=404, detail="Candidate not found.")
-    return _run_interview_evaluation(email, resume, payload.interview_type, payload.transcript)
+    current_job = database.load_job(company_id) or DEFAULT_JOB
+    return _run_interview_evaluation(email, resume, payload.interview_type, payload.transcript, current_job)
 
 
 # ── Recording Upload & Playback ────────────────────────────────────────────
@@ -279,7 +441,11 @@ def serve_local_recording(filename: str):
 
 
 @app.get("/api/interview/recording/{email}/{interview_type}")
-def get_recording_url(email: str, interview_type: str) -> dict[str, Any]:
+def get_recording_url(
+    email: str,
+    interview_type: str,
+    user: dict = Depends(require_authenticated),
+) -> dict[str, Any]:
     """Return a presigned URL (or local path) so HR can play the recording."""
     doc = database.get_candidate_doc(email)
     if not doc:
@@ -348,13 +514,22 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
     await websocket.accept()
 
     email = _email_for_token(token)
-    resume = next((c for c in candidate_resumes if c.email == email), None) if email else None
-    if not email or not resume:
+    if not email:
         await websocket.send_json({"type": "error", "message": "Invitation not found or invalid."})
         await websocket.close()
         return
 
-    doc = database.get_candidate_doc(email) or {}
+    candidate_doc = database.get_candidate_doc(email)
+    company_id = candidate_doc.get("company_id") if candidate_doc else None
+    candidates = database.load_candidates(company_id)
+    resume = next((c for c in candidates if c.email == email), None)
+    if not resume:
+        await websocket.send_json({"type": "error", "message": "Candidate not found."})
+        await websocket.close()
+        return
+
+    current_job = database.load_job(company_id) or DEFAULT_JOB
+    doc = candidate_doc or {}
     invitation = doc.get("invitation") or {}
     hr_invitation = doc.get("hr_invitation") or {}
     if invitation.get("token") == token:
@@ -532,7 +707,7 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
                 await send_ws({"type": "turn_complete"})
                 if _interview_is_complete(transcript):
                     result = await asyncio.to_thread(
-                        _run_interview_evaluation, email, resume, interview_type, list(transcript)
+                        _run_interview_evaluation, email, resume, interview_type, list(transcript), current_job
                     )
                     await send_ws({"type": "evaluation", "result": result})
                     done.set()
@@ -577,7 +752,9 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
 
 # ── Workspace Payload ───────────────────────────────────────────────────────
 
-def _workspace_payload() -> dict[str, Any]:
+def _workspace_payload(company_id: str | None = None, user: dict | None = None) -> dict[str, Any]:
+    current_job = database.load_job(company_id) or DEFAULT_JOB
+    candidate_resumes = database.load_candidates(company_id)
     results = score_candidates(candidate_resumes, current_job, ranking_service)
     rows = []
     hr_invited = 0
@@ -629,12 +806,18 @@ def _workspace_payload() -> dict[str, Any]:
     rejected = len([result for result in results if result.status == "Rejected"])
     average = round(sum(result.score.total_score for result in results) / len(results)) if results else 0
 
+    # Build company info from user context
+    company_info = {"name": "AI Hiring Platform", "plan": "starter", "role": "user"}
+    if user:
+        company_info["role"] = user.get("role", "user")
+        if user.get("company_id"):
+            company = database.get_company_by_id(str(user["company_id"]))
+            if company:
+                company_info["name"] = company.get("name", "Unknown")
+                company_info["plan"] = company.get("plan", "starter")
+
     return {
-        "company": {
-            "name": "Acme Talent Labs",
-            "plan": "Growth",
-            "role": "Company Admin",
-        },
+        "company": company_info,
         "job": asdict(current_job),
         "metrics": {
             "uploaded": len(candidate_resumes),
@@ -679,7 +862,8 @@ def _sanitized_questions(custom_questions: list[dict]) -> list[dict]:
 
 
 def _run_interview_evaluation(
-    email: str, resume: ParsedResume, interview_type: str, transcript: list[dict]
+    email: str, resume: ParsedResume, interview_type: str, transcript: list[dict],
+    current_job: JobDescription | None = None,
 ) -> dict[str, Any]:
     """Score an interview transcript and persist the result + pipeline stage."""
     if interview_type == "technical":
@@ -720,20 +904,16 @@ def _run_interview_evaluation(
 
 
 def _email_for_token(token: str) -> str | None:
+    """Find candidate email by interview token. Searches all candidates."""
     if not token:
         return None
-    for email in _candidate_emails():
-        doc = database.get_candidate_doc(email) or {}
-        # Check both technical invitation and HR invitation
-        invitation = doc.get("invitation") or {}
-        hr_invitation = doc.get("hr_invitation") or {}
-        if invitation.get("token") == token or hr_invitation.get("token") == token:
-            return email
+    # Search across all candidates (token is globally unique)
+    for doc in database._candidates.find(
+        {"$or": [{"invitation.token": token}, {"hr_invitation.token": token}]},
+        {"email": 1},
+    ):
+        return doc.get("email")
     return None
-
-
-def _candidate_emails() -> list[str]:
-    return [c.email for c in candidate_resumes]
 
 
 def _parse_uploaded_bytes(file_name: str, contents: bytes) -> ParsedResume:

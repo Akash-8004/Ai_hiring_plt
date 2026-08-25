@@ -2,6 +2,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
+import { AuthProvider } from "./components/auth/AuthProvider";
+import { LoginPage } from "./components/auth/LoginPage";
+import { SuperAdminDashboard } from "./components/admin/SuperAdminDashboard";
+import { TeamManagementView } from "./components/team/TeamManagementView";
 import { Sidebar } from "./components/layout/Sidebar";
 import { Topbar } from "./components/layout/Topbar";
 import { Dashboard } from "./components/dashboard/Dashboard";
@@ -12,10 +16,11 @@ import { CandidatePanel } from "./components/candidate/CandidatePanel";
 import { SettingsView } from "./components/settings/SettingsView";
 import { LoadingScreen } from "./components/common/LoadingScreen";
 import { InterviewApp } from "./components/interview/InterviewApp";
-
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+import { useAuth } from "./hooks/useAuth";
+import { apiFetchJson } from "./utils/api";
 
 function App() {
+  const { user, role } = useAuth();
   const [workspace, setWorkspace] = useState(null);
   const [activeView, setActiveView] = useState("dashboard");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -27,17 +32,16 @@ function App() {
 
   async function refresh() {
     setError("");
-    const response = await fetch(`${API_BASE}/api/workspace`);
-    if (!response.ok) {
-      throw new Error("API is not responding");
+    try {
+      const data = await apiFetchJson("/api/workspace");
+      setWorkspace(data);
+    } catch (err) {
+      setError(err.message || "Failed to load workspace data");
     }
-    setWorkspace(await response.json());
   }
 
   useEffect(() => {
-    refresh()
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+    refresh().finally(() => setLoading(false));
   }, []);
 
   const candidates = useMemo(() => {
@@ -53,13 +57,11 @@ function App() {
     setSaving(true);
     setError("");
     try {
-      const response = await fetch(`${API_BASE}/api/job`, {
+      const data = await apiFetchJson("/api/job", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(job),
       });
-      if (!response.ok) throw new Error("Could not save JD");
-      setWorkspace(await response.json());
+      setWorkspace(data);
       setActiveView("dashboard");
     } catch (err) {
       setError(err.message);
@@ -72,13 +74,11 @@ function App() {
     setSaving(true);
     setError("");
     try {
-      const response = await fetch(`${API_BASE}/api/resumes/manual`, {
+      const data = await apiFetchJson("/api/resumes/manual", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (!response.ok) throw new Error("Could not add resume");
-      setWorkspace(await response.json());
+      setWorkspace(data);
       setActiveView("dashboard");
     } catch (err) {
       setError(err.message);
@@ -94,12 +94,11 @@ function App() {
     const form = new FormData();
     Array.from(files).forEach((file) => form.append("files", file));
     try {
-      const response = await fetch(`${API_BASE}/api/resumes/upload`, {
+      const data = await apiFetchJson("/api/resumes/upload", {
         method: "POST",
         body: form,
       });
-      if (!response.ok) throw new Error("Could not upload resumes");
-      setWorkspace(await response.json());
+      setWorkspace(data);
       setActiveView("dashboard");
     } catch (err) {
       setError(err.message);
@@ -112,9 +111,8 @@ function App() {
     setSaving(true);
     setError("");
     try {
-      const response = await fetch(`${API_BASE}${path}`, { method });
-      if (!response.ok) throw new Error("Request failed");
-      setWorkspace(await response.json());
+      const data = await apiFetchJson(path, { method });
+      setWorkspace(data);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -126,12 +124,11 @@ function App() {
     setSaving(true);
     setError("");
     try {
-      const response = await fetch(
-        `${API_BASE}/api/candidates/${encodeURIComponent(email)}/invite?interview_type=${interviewType}`,
+      const data = await apiFetchJson(
+        `/api/candidates/${encodeURIComponent(email)}/invite?interview_type=${interviewType}`,
         { method: "POST" }
       );
-      if (!response.ok) throw new Error("Could not create invitation");
-      setWorkspace(await response.json());
+      setWorkspace(data);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -172,7 +169,7 @@ function App() {
         )}
 
         {activeView === "job" && (
-          <JobEditor job={workspace.job} onSave={saveJob} saving={saving} />
+          <JobEditor job={workspace?.job} onSave={saveJob} saving={saving} />
         )}
 
         {activeView === "resumes" && (
@@ -181,11 +178,14 @@ function App() {
 
         {activeView === "pipeline" && (
           <Pipeline
-            candidates={workspace.candidates}
+            candidates={workspace?.candidates || []}
             onInvite={inviteCandidate}
             busy={saving}
           />
         )}
+
+        {activeView === "team" && <TeamManagementView />}
+
         {activeView === "settings" && <SettingsView />}
       </main>
 
@@ -202,18 +202,44 @@ function titleFor(view) {
     job: "Job Setup",
     resumes: "Resume Intake",
     pipeline: "Hiring Pipeline",
+    team: "Team Access Management",
     settings: "Workspace Settings",
-  }[view];
+  }[view] || "Workspace";
+}
+
+function AuthRouter() {
+  const { isAuthenticated, loading, role } = useAuth();
+
+  if (loading) {
+    return <LoadingScreen />;
+  }
+
+  if (!isAuthenticated) {
+    return <LoginPage />;
+  }
+
+  if (role === "super_admin") {
+    return <SuperAdminDashboard />;
+  }
+
+  return <App />;
 }
 
 function Root() {
   const params = new URLSearchParams(window.location.search);
   const token = params.get("interview");
   const interviewType = params.get("type") || "technical";
+
+  // Public candidate interview sessions don't require workspace login
   if (token) {
     return <InterviewApp token={token} interviewType={interviewType} />;
   }
-  return <App />;
+
+  return (
+    <AuthProvider>
+      <AuthRouter />
+    </AuthProvider>
+  );
 }
 
 createRoot(document.getElementById("root")).render(<Root />);
