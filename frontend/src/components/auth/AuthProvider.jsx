@@ -86,10 +86,23 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener("auth:unauthorized", handleUnauthorized);
   }, [logout]);
 
+  const hasPermission = useCallback(
+    (perm) => {
+      if (!user) return false;
+      // Tenant owners always have full access, mirroring the backend rule.
+      if (user.role === "super_admin" || user.role === "company_admin") return true;
+      const perms = user.permissions || [];
+      return perms.includes("*") || perms.includes(perm);
+    },
+    [user],
+  );
+
   const value = {
     user,
     token,
     role: user?.role || null,
+    permissions: user?.permissions || [],
+    hasPermission,
     isAuthenticated: !!user,
     loading,
     sessionError,

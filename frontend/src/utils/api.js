@@ -35,7 +35,10 @@ export async function apiFetchJson(path, options = {}) {
   const response = await apiFetch(path, options);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const errorMsg = data.detail || data.message || `Request failed with status ${response.status}`;
+    let errorMsg = data.detail || data.message || `Request failed with status ${response.status}`;
+    if (Array.isArray(errorMsg)) {
+      errorMsg = errorMsg.map((e) => e.msg || e.message || JSON.stringify(e)).join("\n");
+    }
     throw new Error(errorMsg);
   }
   return data;

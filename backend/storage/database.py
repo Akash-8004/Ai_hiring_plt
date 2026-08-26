@@ -314,7 +314,7 @@ def load_candidates(company_id: str | None = None) -> list[ParsedResume]:
     }
     query = {"company_id": company_id} if company_id else {}
     for doc in _candidates.find(query):
-        doc["uploaded_at"] = doc.get("uploaded_at") or datetime.utcnow()
+        doc["uploaded_at"] = doc.get("uploaded_at") or datetime.now(timezone.utc)
         clean_doc = {k: v for k, v in doc.items() if k in valid_fields}
         if clean_doc.get("email"):
             resumes.append(ParsedResume(**clean_doc))
@@ -408,6 +408,29 @@ def set_candidate_interview_recording(
     )
 
 
+def set_candidate_score(
+    email: str,
+    score_dict: dict,
+    company_id: str | None = None,
+) -> None:
+    """Cache the AI ranking result inside the candidate document."""
+    _candidates.update_one(
+        _candidate_filter(email, company_id),
+        {"$set": {"cached_score": score_dict}},
+    )
+
+
+def clear_candidate_scores(company_id: str | None = None) -> int:
+    """Remove cached AI ranking scores for all candidates in a company.
+
+    Called when the job description changes so scores re-compute against the
+    new job.  Returns the number of affected documents.
+    """
+    query = {"company_id": ObjectId(company_id)} if company_id else {}
+    result = _candidates.update_many(query, {"$unset": {"cached_score": ""}})
+    return result.modified_count
+
+
 def append_transcript_turn(
     email: str,
     role: str,
@@ -424,7 +447,7 @@ def append_transcript_turn(
     turn = {
         "role": role,
         "content": content,
-        "at": datetime.utcnow().isoformat(),
+        "at": datetime.now(timezone.utc).isoformat(),
     }
     if extra:
         turn.update(extra)

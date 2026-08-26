@@ -2,7 +2,7 @@ import React from "react";
 import { Loader2, Send, UsersRound } from "lucide-react";
 import { PipelineCandidateRow } from "./PipelineCandidateRow";
 
-export function Pipeline({ candidates, onInvite, busy }) {
+export function Pipeline({ candidates, onInvite, canInvite = false, busy }) {
   const uploaded = candidates.length;
   const shortlisted = candidates.filter((c) => c.Status === "Shortlisted");
   const hrInvited = candidates.filter((c) => c.hr_invitation?.link);
@@ -45,18 +45,20 @@ export function Pipeline({ candidates, onInvite, busy }) {
             <h2><UsersRound size={18} /> HR Interview</h2>
             <span>Invite shortlisted candidates to AI HR interview first</span>
           </div>
-          <button
-            className="primary-button"
-            onClick={() => {
-              shortlisted
-                .filter((c) => !hrInvitedEmails.has(c.Email))
-                .forEach((c) => onInvite(c.Email, "hr"));
-            }}
-            disabled={busy || !shortlisted.filter((c) => !hrInvitedEmails.has(c.Email)).length}
-          >
-            {busy ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
-            Invite for HR
-          </button>
+          {canInvite ? (
+            <button
+              className="primary-button"
+              onClick={() => {
+                shortlisted
+                  .filter((c) => !hrInvitedEmails.has(c.Email))
+                  .forEach((c) => onInvite(c.Email, "hr"));
+              }}
+              disabled={busy || !shortlisted.filter((c) => !hrInvitedEmails.has(c.Email)).length}
+            >
+              {busy ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
+              Invite for HR
+            </button>
+          ) : null}
         </div>
         {!candidates.length ? (
           <div className="empty-state">
@@ -82,6 +84,7 @@ export function Pipeline({ candidates, onInvite, busy }) {
                     key={`${candidate.Email}-${candidate.Name}`}
                     candidate={candidate}
                     onInvite={onInvite}
+                    canInvite={canInvite}
                     busy={busy}
                   />
                 ))}

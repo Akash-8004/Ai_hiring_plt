@@ -1,8 +1,9 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   BarChart3,
   BriefcaseBusiness,
   Building2,
+  ChevronDown,
   LayoutDashboard,
   LogOut,
   Settings,
@@ -13,15 +14,21 @@ import {
 import { useAuth } from "../../hooks/useAuth";
 
 export function Sidebar({ activeView, onViewChange, company }) {
-  const { user, role, logout } = useAuth();
+  const { user, role, logout, hasPermission } = useAuth();
+  const [planOpen, setPlanOpen] = useState(false);
+
+  const planName = (company?.plan || "starter").toUpperCase();
+  const seatsUsed = company?.current_users;
+  const maxUsers = company?.max_users;
+  const maxJobs = company?.max_jobs;
 
   const isCompanyAdmin = role === "company_admin" || role === "super_admin";
 
   const navItems = [
     ["dashboard", LayoutDashboard, "Dashboard"],
     ...(isCompanyAdmin ? [["job", BriefcaseBusiness, "Job Setup"]] : []),
-    ["resumes", Upload, "Resume Intake"],
-    ["pipeline", BarChart3, "Pipeline"],
+    ...(hasPermission("manage_resumes") ? [["resumes", Upload, "Resume Intake"]] : []),
+    ...(hasPermission("view_pipeline") ? [["pipeline", BarChart3, "Pipeline"]] : []),
     ...(isCompanyAdmin ? [["team", Users, "Team Access"]] : []),
     ["settings", Settings, "Settings"],
   ];
@@ -51,12 +58,40 @@ export function Sidebar({ activeView, onViewChange, company }) {
       </nav>
 
       <div className="sidebar-footer-group">
-        <div className="tenant-card">
-          <Building2 size={18} className="text-primary" />
-          <div className="tenant-info-text">
-            <strong className="truncate">{user?.company_name || company?.name || "Company"}</strong>
-            <span>{company?.plan?.toUpperCase() || "STARTER"} PLAN</span>
-          </div>
+        <div className="tenant-card-wrap">
+          <button
+            type="button"
+            className={`tenant-card tenant-card-button ${planOpen ? "active" : ""}`}
+            onClick={() => setPlanOpen((open) => !open)}
+            title="View subscription plan details"
+          >
+            <Building2 size={18} className="text-primary" />
+            <div className="tenant-info-text">
+              <strong className="truncate">{user?.company_name || company?.name || "Company"}</strong>
+              <span>{planName} PLAN</span>
+            </div>
+            <ChevronDown size={15} className={`tenant-chevron ${planOpen ? "open" : ""}`} />
+          </button>
+
+          {planOpen && (
+            <div className="plan-popover">
+              <div className="plan-popover-head">
+                <span className="plan-popover-tier">{planName}</span>
+                <span className="plan-popover-label">Current Plan</span>
+              </div>
+              <ul className="plan-popover-list">
+                <li>
+                  <span>User seats</span>
+                  <strong>{seatsUsed != null ? `${seatsUsed} / ${maxUsers ?? "—"}` : `${maxUsers ?? "—"}`}</strong>
+                </li>
+                <li>
+                  <span>Job postings</span>
+                  <strong>Up to {maxJobs ?? "—"}</strong>
+                </li>
+              </ul>
+              <p className="plan-popover-foot">Contact your platform admin to change your plan.</p>
+            </div>
+          )}
         </div>
 
         <div className="user-profile-badge-card">

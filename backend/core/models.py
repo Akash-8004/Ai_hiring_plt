@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -29,7 +29,7 @@ class ParsedResume:
     linkedin: str = ""
     github: str = ""
     raw_text: str = ""
-    uploaded_at: datetime = field(default_factory=datetime.utcnow)
+    uploaded_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass

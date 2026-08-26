@@ -16,6 +16,7 @@ from backend.auth.models import (
     PLAN_LIMITS,
     CreateCompanyRequest,
     CreateSubUserRequest,
+    ResetUserPasswordRequest,
     UpdateCompanyRequest,
 )
 from backend.auth.security import (
@@ -293,6 +294,38 @@ def activate_user(user_id: str, user: dict = Depends(require_super_admin), reque
     return {"ok": True}
 
 
+@admin_router.post("/users/{user_id}/reset-password")
+def reset_user_password(
+    user_id: str,
+    body: ResetUserPasswordRequest,
+    user: dict = Depends(require_super_admin),
+    request: Request = None,
+):
+    """Super Admin resets a user's password without knowing the current one."""
+    target = database.get_user_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target["role"] == "super_admin":
+        raise HTTPException(status_code=400, detail="Cannot reset another Super Admin's password")
+
+    new_hash = hash_password(body.new_password)
+    database.update_user_password(user_id, new_hash)
+
+    log_activity(
+        action="user.password_reset",
+        category="user_mgmt",
+        actor=user,
+        target_type="user",
+        target_id=user_id,
+        target_label=f"{target['full_name']} ({target['email']})",
+        metadata={"reset_by": user.get("email", "")},
+        severity="critical",
+        request=request,
+    )
+
+    return {"ok": True, "new_password": body.new_password}
+
+
 @admin_router.get("/audit-log")
 def get_audit_log(
     company_id: str | None = None,
@@ -467,6 +500,34 @@ def activate_team_member(user_id: str, user: dict = Depends(require_company_admi
         request=request,
     )
     return {"ok": True}
+
+
+@company_router.get("/audit-log")
+def company_audit_log(
+    category: str | None = None,
+    severity: str | None = None,
+    search: str | None = None,
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
+    user: dict = Depends(require_company_admin),
+):
+    """Company-scoped audit trail for the Team Access screen.
+
+    A Company Admin sees only their own company's activity: the company_id is
+    taken from the authenticated token, never from the query string, so one
+    tenant can never read another tenant's logs.
+    """
+    company_id = str(user.get("company_id", ""))
+    if not company_id:
+        raise HTTPException(status_code=400, detail="No company associated")
+    filters = {"company_id": company_id}
+    if category:
+        filters["category"] = category
+    if severity:
+        filters["severity"] = severity
+    if search:
+        filters["search"] = search
+    return database.query_audit_log(filters, page, limit)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────

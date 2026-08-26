@@ -8,7 +8,7 @@ import { SuperAdminDashboard } from "./components/admin/SuperAdminDashboard";
 import { TeamManagementView } from "./components/team/TeamManagementView";
 import { Sidebar } from "./components/layout/Sidebar";
 import { Topbar } from "./components/layout/Topbar";
-import { Dashboard } from "./components/dashboard/Dashboard";
+import { Dashboard, matchesCandidateFilter } from "./components/dashboard/Dashboard";
 import { JobEditor } from "./components/job/JobEditor";
 import { ResumeIntake } from "./components/resumes/ResumeIntake";
 import { Pipeline } from "./components/pipeline/Pipeline";
@@ -20,7 +20,7 @@ import { useAuth } from "./hooks/useAuth";
 import { apiFetchJson } from "./utils/api";
 
 function App() {
-  const { user, role } = useAuth();
+  const { user, role, hasPermission } = useAuth();
   const [workspace, setWorkspace] = useState(null);
   const [activeView, setActiveView] = useState("dashboard");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -47,8 +47,8 @@ function App() {
   const candidates = useMemo(() => {
     const items = workspace?.candidates || [];
     return items.filter((candidate) => {
-      const matchesStatus = statusFilter === "All" || candidate.Status === statusFilter;
-      const searchable = `${candidate.Name} ${candidate.Email} ${candidate.Skills}`.toLowerCase();
+      const matchesStatus = matchesCandidateFilter(candidate, statusFilter);
+      const searchable = `${candidate.Name} ${candidate.Email} ${candidate.Phone || ""} ${candidate.Skills}`.toLowerCase();
       return matchesStatus && searchable.includes(query.toLowerCase());
     });
   }, [workspace, statusFilter, query]);
@@ -140,12 +140,28 @@ function App() {
     return <LoadingScreen />;
   }
 
+  // Granular access flags (backend enforces these too; this keeps the UI honest).
+  const isCompanyAdmin = role === "company_admin" || role === "super_admin";
+  const canManageResumes = hasPermission("manage_resumes");
+  const canViewPipeline = hasPermission("view_pipeline");
+  const canConductInterviews = hasPermission("conduct_interviews");
+
+  // If the active view is one the user isn't allowed to see, fall back to the
+  // dashboard so a restricted member can never land on a forbidden screen.
+  const viewAllowed = (view) => {
+    if (view === "resumes") return canManageResumes;
+    if (view === "pipeline") return canViewPipeline;
+    if (view === "job" || view === "team") return isCompanyAdmin;
+    return true;
+  };
+  const effectiveView = viewAllowed(activeView) ? activeView : "dashboard";
+
   return (
     <div className="app-shell">
-      <Sidebar activeView={activeView} onViewChange={setActiveView} company={workspace?.company} />
+      <Sidebar activeView={effectiveView} onViewChange={setActiveView} company={workspace?.company} />
       <main className="main-panel">
         <Topbar
-          title={titleFor(activeView)}
+          title={titleFor(effectiveView)}
           company={workspace?.company}
           busy={saving}
           onLoadSamples={() => postAction("/api/resumes/sample")}
@@ -154,7 +170,7 @@ function App() {
 
         {error ? <div className="notice error">{error}</div> : null}
 
-        {activeView === "dashboard" && (
+        {effectiveView === "dashboard" && (
           <Dashboard
             workspace={workspace}
             candidates={candidates}
@@ -163,30 +179,31 @@ function App() {
             onStatusFilter={setStatusFilter}
             onQuery={setQuery}
             onCandidate={setSelectedCandidate}
-            onGoToJob={() => setActiveView("job")}
-            onGoToUpload={() => setActiveView("resumes")}
+            onGoToJob={isCompanyAdmin ? () => setActiveView("job") : undefined}
+            onGoToUpload={canManageResumes ? () => setActiveView("resumes") : undefined}
           />
         )}
 
-        {activeView === "job" && (
+        {effectiveView === "job" && (
           <JobEditor job={workspace?.job} onSave={saveJob} saving={saving} />
         )}
 
-        {activeView === "resumes" && (
+        {effectiveView === "resumes" && (
           <ResumeIntake onManualResume={addManualResume} onUpload={uploadFiles} saving={saving} />
         )}
 
-        {activeView === "pipeline" && (
+        {effectiveView === "pipeline" && (
           <Pipeline
             candidates={workspace?.candidates || []}
             onInvite={inviteCandidate}
+            canInvite={canConductInterviews}
             busy={saving}
           />
         )}
 
-        {activeView === "team" && <TeamManagementView />}
+        {effectiveView === "team" && <TeamManagementView />}
 
-        {activeView === "settings" && <SettingsView />}
+        {effectiveView === "settings" && <SettingsView />}
       </main>
 
       {selectedCandidate ? (

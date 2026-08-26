@@ -169,6 +169,31 @@ async def require_authenticated(
     return user
 
 
+def require_permission(*required: str):
+    """Dependency factory enforcing granular sub-user permissions.
+
+    Tenant owners (super_admin / company_admin) and holders of the wildcard
+    ``"*"`` permission are always allowed. Every other user must have *all* of
+    the listed permission keys on their account, otherwise a 403 is raised.
+
+    Usage:  ``user: dict = Depends(require_permission("manage_resumes"))``
+    """
+    async def _checker(user: dict = Depends(get_current_user)) -> dict:
+        role = user.get("role")
+        perms = user.get("permissions", []) or []
+        if role in ("super_admin", "company_admin") or "*" in perms:
+            return user
+        missing = [p for p in required if p not in perms]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to perform this action.",
+            )
+        return user
+
+    return _checker
+
+
 # ── Audit Logging ───────────────────────────────────────────────────────────
 
 def log_activity(

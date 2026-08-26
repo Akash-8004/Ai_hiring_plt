@@ -15,6 +15,7 @@ import {
   Copy,
 } from "lucide-react";
 import { apiFetchJson } from "../../utils/api";
+import { CompanyActivityLog } from "./CompanyActivityLog";
 
 export function TeamManagementView() {
   const [teamData, setTeamData] = useState(null);
@@ -267,6 +268,9 @@ export function TeamManagementView() {
           </table>
         </div>
       </div>
+
+      {/* Company-scoped activity log for the team */}
+      <CompanyActivityLog />
 
       {/* Add Sub-User Modal */}
       {modalOpen && (

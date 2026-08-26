@@ -14,6 +14,38 @@ import {
 import { Metric } from "../common/Metric";
 import { CandidateTable } from "./CandidateTable";
 
+// Candidate pipeline filters shown in the dashboard dropdown. Kept next to the
+// predicate below so the labels and the matching logic never drift apart.
+export const CANDIDATE_FILTERS = [
+  "All",
+  "Resume Shortlisted",
+  "Resume Rejected",
+  "HR Shortlisted",
+  "HR Rejected",
+  "Tech Shortlisted",
+  "Tech Rejected",
+  "All Passed",
+];
+
+// True when a candidate belongs in the given pipeline filter. "Shortlisted" here
+// means "cleared that round"; "All Passed" means the candidate cleared every round.
+export function matchesCandidateFilter(candidate, filter) {
+  const hrPass = candidate.hr_interview?.decision === "PASS";
+  const hrFail = candidate.hr_interview?.decision === "FAIL";
+  const techPass = candidate.technical_interview?.decision === "PASS";
+  const techFail = candidate.technical_interview?.decision === "FAIL";
+  switch (filter) {
+    case "Resume Shortlisted": return candidate.Status === "Shortlisted";
+    case "Resume Rejected": return candidate.Status === "Rejected";
+    case "HR Shortlisted": return hrPass;
+    case "HR Rejected": return hrFail;
+    case "Tech Shortlisted": return techPass;
+    case "Tech Rejected": return techFail;
+    case "All Passed": return candidate.Status === "Shortlisted" && hrPass && techPass;
+    default: return true; // "All"
+  }
+}
+
 export function Dashboard({
   workspace,
   candidates,
@@ -56,14 +88,18 @@ export function Dashboard({
           </div>
         </div>
         <div className="hero-actions">
-          <button className="secondary-button" onClick={onGoToJob}>
-            <BriefcaseBusiness size={17} />
-            Edit JD
-          </button>
-          <button className="primary-button" onClick={onGoToUpload}>
-            <Upload size={17} />
-            Add Resumes
-          </button>
+          {onGoToJob ? (
+            <button className="secondary-button" onClick={onGoToJob}>
+              <BriefcaseBusiness size={17} />
+              Edit JD
+            </button>
+          ) : null}
+          {onGoToUpload ? (
+            <button className="primary-button" onClick={onGoToUpload}>
+              <Upload size={17} />
+              Add Resumes
+            </button>
+          ) : null}
         </div>
       </section>
 
@@ -78,17 +114,16 @@ export function Dashboard({
               <Search size={17} />
               <input value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search candidates" />
             </div>
-            <div className="segmented">
-              {["All", "Shortlisted", "Rejected"].map((status) => (
-                <button
-                  key={status}
-                  className={statusFilter === status ? "active" : ""}
-                  onClick={() => onStatusFilter(status)}
-                >
-                  {status}
-                </button>
+            <select
+              className="select-field"
+              value={statusFilter}
+              onChange={(event) => onStatusFilter(event.target.value)}
+              aria-label="Filter candidates by pipeline stage"
+            >
+              {CANDIDATE_FILTERS.map((status) => (
+                <option key={status} value={status}>{status}</option>
               ))}
-            </div>
+            </select>
           </div>
         </div>
         <CandidateTable candidates={candidates} onCandidate={onCandidate} />

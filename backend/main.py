@@ -35,6 +35,7 @@ from backend.auth.security import (
     log_activity,
     require_authenticated,
     require_company_admin,
+    require_permission,
 )
 from backend.auth.routes import router as auth_router
 from backend.admin.routes import admin_router, company_router
@@ -168,6 +169,7 @@ def update_job(
     company_id = str(user["company_id"]) if user.get("company_id") else None
     job = JobDescription(**payload.model_dump())
     database.save_job(job, company_id)
+    database.clear_candidate_scores(company_id)
     log_activity(
         action="job.updated",
         category="job",
@@ -214,7 +216,7 @@ def process_questions_text(
 @app.post("/api/resumes/manual")
 def add_manual_resume(
     payload: ManualResumePayload,
-    user: dict = Depends(require_authenticated),
+    user: dict = Depends(require_permission("manage_resumes")),
     request: Request = None,
 ) -> dict[str, Any]:
     if not payload.text.strip():
@@ -236,7 +238,7 @@ def add_manual_resume(
 @app.post("/api/resumes/upload")
 async def upload_resumes(
     files: list[UploadFile] = File(...),
-    user: dict = Depends(require_authenticated),
+    user: dict = Depends(require_permission("manage_resumes")),
     request: Request = None,
 ) -> dict[str, Any]:
     company_id = str(user["company_id"]) if user.get("company_id") else None
@@ -257,7 +259,7 @@ async def upload_resumes(
 
 @app.post("/api/resumes/sample")
 def load_sample_resumes(
-    user: dict = Depends(require_authenticated),
+    user: dict = Depends(require_permission("manage_resumes")),
 ) -> dict[str, Any]:
     company_id = str(user["company_id"]) if user.get("company_id") else None
     database.clear_candidates(company_id)
@@ -290,7 +292,7 @@ def clear_resumes(
 def invite_candidate(
     email: str,
     interview_type: str = "technical",
-    user: dict = Depends(require_authenticated),
+    user: dict = Depends(require_permission("conduct_interviews")),
     request: Request = None,
 ) -> dict[str, Any]:
     """Generate an interview invitation link. interview_type can be 'technical' or 'hr'."""
@@ -444,7 +446,7 @@ def serve_local_recording(filename: str):
 def get_recording_url(
     email: str,
     interview_type: str,
-    user: dict = Depends(require_authenticated),
+    user: dict = Depends(require_permission("conduct_interviews")),
 ) -> dict[str, Any]:
     """Return a presigned URL (or local path) so HR can play the recording."""
     company_id = str(user["company_id"]) if user.get("company_id") else None
@@ -756,7 +758,7 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
 def _workspace_payload(company_id: str | None = None, user: dict | None = None) -> dict[str, Any]:
     current_job = database.load_job(company_id) or DEFAULT_JOB
     candidate_resumes = database.load_candidates(company_id)
-    results = score_candidates(candidate_resumes, current_job, ranking_service)
+    results = score_candidates(candidate_resumes, current_job, ranking_service, company_id)
     rows = []
     hr_invited = 0
     hr_interviewed = 0
@@ -816,6 +818,9 @@ def _workspace_payload(company_id: str | None = None, user: dict | None = None) 
             if company:
                 company_info["name"] = company.get("name", "Unknown")
                 company_info["plan"] = company.get("plan", "starter")
+                company_info["max_users"] = company.get("max_users")
+                company_info["max_jobs"] = company.get("max_jobs")
+                company_info["current_users"] = database.count_company_users(str(user["company_id"]))
 
     return {
         "company": company_info,

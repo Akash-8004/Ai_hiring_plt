@@ -2,7 +2,7 @@ import React from "react";
 import { CheckCircle2, Send, XCircle } from "lucide-react";
 import { CopyButton } from "../common/CopyButton";
 
-export function PipelineCandidateRow({ candidate, onInvite, busy }) {
+export function PipelineCandidateRow({ candidate, onInvite, canInvite = false, busy }) {
   const hrInvitation = candidate.hr_invitation;
   const hrInterview = candidate.hr_interview || {};
   const invitation = candidate.invitation;
@@ -25,11 +25,13 @@ export function PipelineCandidateRow({ candidate, onInvite, busy }) {
       </div>
     );
   } else if (candidate.Status === "Shortlisted") {
-    hrInviteCell = (
+    hrInviteCell = canInvite ? (
       <button className="secondary-button" onClick={() => onInvite(candidate.Email, "hr")} disabled={busy}>
         <Send size={15} />
         Invite
       </button>
+    ) : (
+      <span className="muted-cell">Awaiting invite</span>
     );
   } else {
     hrInviteCell = <span className="muted-cell">Not shortlisted</span>;
@@ -75,11 +77,13 @@ export function PipelineCandidateRow({ candidate, onInvite, busy }) {
       </div>
     );
   } else if (hrInterview.decision === "PASS") {
-    techCell = (
+    techCell = canInvite ? (
       <button className="secondary-button" onClick={() => onInvite(candidate.Email, "technical")} disabled={busy}>
         <Send size={15} />
         Invite Tech
       </button>
+    ) : (
+      <span className="muted-cell">Awaiting invite</span>
     );
   } else {
     techCell = <span className="muted-cell">Pending HR pass</span>;
