@@ -8,6 +8,7 @@ def score_candidates(
     job: JobDescription,
     ranking_service: AIRankingService,
     company_id: str | None = None,
+    job_id: str | None = None,
 ) -> list[CandidateResult]:
     results: list[CandidateResult] = []
     seen_emails: set[str] = set()
@@ -21,7 +22,7 @@ def score_candidates(
 
         # Try to use cached score if available
         if company_id:
-            doc = database.get_candidate_doc(resume.email, company_id)
+            doc = database.get_candidate_doc(resume.email, company_id, job_id)
             if doc and doc.get("cached_score"):
                 try:
                     score = ResumeScore(**doc["cached_score"])
@@ -43,6 +44,7 @@ def score_candidates(
                         "summary": score.summary,
                     },
                     company_id,
+                    job_id,
                 )
 
         status = "Shortlisted" if score.total_score >= job.threshold else "Rejected"

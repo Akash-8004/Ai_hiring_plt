@@ -12,13 +12,30 @@ function blankQuestion() {
   return { question: "", topic: "General", difficulty: "medium", expected_points: [] };
 }
 
-export function JobEditor({ job, onSave, saving }) {
+function blankJobForm() {
+  return {
+    title: "",
+    department: "",
+    location: "",
+    experience_years: 0,
+    required_skills: "",
+    nice_to_have_skills: "",
+    education: "",
+    description: "",
+    threshold: 80,
+    hr_interview_duration: 7,
+    technical_interview_duration: 5,
+  };
+}
+
+export function JobEditor({ job, jobId, mode = "edit", driveCount = 0, maxJobs = 3, onSave, saving }) {
+  const source = mode === "create" || !job ? blankJobForm() : job;
   const [form, setForm] = useState({
-    ...job,
-    required_skills: job.required_skills.join(", "),
-    nice_to_have_skills: job.nice_to_have_skills.join(", "),
+    ...source,
+    required_skills: Array.isArray(source.required_skills) ? source.required_skills.join(", ") : source.required_skills || "",
+    nice_to_have_skills: Array.isArray(source.nice_to_have_skills) ? source.nice_to_have_skills.join(", ") : source.nice_to_have_skills || "",
   });
-  const [questions, setQuestions] = useState(job.custom_questions || []);
+  const [questions, setQuestions] = useState(mode === "create" ? [] : (job?.custom_questions || []));
   const [manualText, setManualText] = useState("");
   const [processing, setProcessing] = useState(false);
   const [processingError, setProcessingError] = useState("");
@@ -106,7 +123,10 @@ export function JobEditor({ job, onSave, saving }) {
   return (
     <form className="form-grid" onSubmit={submit}>
       <section className="form-panel wide">
-        <h2>Job Profile</h2>
+        <h2>{mode === "create" ? "Create Job Drive" : "Edit Job Drive"}</h2>
+        <p className="text-sm text-muted mb-3">
+          {driveCount} of {maxJobs} drives used
+        </p>
         <div className="field-grid">
           <Field label="Job title" value={form.title} onChange={(value) => update("title", value)} />
           <Field label="Department" value={form.department} onChange={(value) => update("department", value)} />
@@ -144,7 +164,7 @@ export function JobEditor({ job, onSave, saving }) {
         </label>
         <button className="primary-button submit-button" disabled={saving}>
           {saving ? <Loader2 className="spin" size={17} /> : <Sparkles size={17} />}
-          Save JD
+          {mode === "create" ? "Create Drive" : "Save JD"}
         </button>
       </section>
 

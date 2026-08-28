@@ -14,6 +14,7 @@ import { ResumeIntake } from "./components/resumes/ResumeIntake";
 import { Pipeline } from "./components/pipeline/Pipeline";
 import { CandidatePanel } from "./components/candidate/CandidatePanel";
 import { SettingsView } from "./components/settings/SettingsView";
+import { UsageView } from "./components/usage/UsageView";
 import { LoadingScreen } from "./components/common/LoadingScreen";
 import { InterviewApp } from "./components/interview/InterviewApp";
 import { useAuth } from "./hooks/useAuth";
@@ -22,7 +23,9 @@ import { apiFetchJson } from "./utils/api";
 function App() {
   const { user, role, hasPermission } = useAuth();
   const [workspace, setWorkspace] = useState(null);
+  const [activeJobId, setActiveJobId] = useState(null);
   const [activeView, setActiveView] = useState("dashboard");
+  const [jobEditorMode, setJobEditorMode] = useState("edit");
   const [statusFilter, setStatusFilter] = useState("All");
   const [query, setQuery] = useState("");
   const [selectedCandidate, setSelectedCandidate] = useState(null);
@@ -30,18 +33,21 @@ function App() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  async function refresh() {
+  async function refresh(jobId = activeJobId) {
     setError("");
     try {
-      const data = await apiFetchJson("/api/workspace");
+      const qs = jobId ? `?job_id=${encodeURIComponent(jobId)}` : "";
+      const data = await apiFetchJson(`/api/workspace${qs}`);
       setWorkspace(data);
+      setActiveJobId(data.job_id || null);
     } catch (err) {
       setError(err.message || "Failed to load workspace data");
     }
   }
 
   useEffect(() => {
-    refresh().finally(() => setLoading(false));
+    refresh(null).finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const candidates = useMemo(() => {
@@ -57,17 +63,57 @@ function App() {
     setSaving(true);
     setError("");
     try {
+      const body = { ...job, job_id: jobEditorMode === "create" ? null : activeJobId };
       const data = await apiFetchJson("/api/job", {
         method: "PUT",
-        body: JSON.stringify(job),
+        body: JSON.stringify(body),
       });
       setWorkspace(data);
+      setActiveJobId(data.job_id || null);
+      setJobEditorMode("edit");
       setActiveView("dashboard");
     } catch (err) {
       setError(err.message);
     } finally {
       setSaving(false);
     }
+  }
+
+  async function switchDrive(jobId) {
+    setSaving(true);
+    setError("");
+    try {
+      await refresh(jobId);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteDrive(drive) {
+    const count = drive.candidate_count ?? 0;
+    const msg = `Delete drive "${drive.title}"? This permanently removes the drive and all ${count} of its candidates.`;
+    if (!window.confirm(msg)) return;
+    setSaving(true);
+    setError("");
+    try {
+      const data = await apiFetchJson(`/api/job/${encodeURIComponent(drive.job_id)}`, { method: "DELETE" });
+      setWorkspace(data);
+      setActiveJobId(data.job_id || null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function openCreateDrive() {
+    setJobEditorMode("create");
+    setActiveView("job");
+  }
+
+  function openEditDrive(jobId) {
+    setJobEditorMode("edit");
+    switchDrive(jobId).then(() => setActiveView("job"));
   }
 
   async function addManualResume(payload) {
@@ -79,6 +125,7 @@ function App() {
         body: JSON.stringify(payload),
       });
       setWorkspace(data);
+      setActiveJobId(data.job_id || null);
       setActiveView("dashboard");
     } catch (err) {
       setError(err.message);
@@ -99,6 +146,7 @@ function App() {
         body: form,
       });
       setWorkspace(data);
+      setActiveJobId(data.job_id || null);
       setActiveView("dashboard");
     } catch (err) {
       setError(err.message);
@@ -113,6 +161,7 @@ function App() {
     try {
       const data = await apiFetchJson(path, { method });
       setWorkspace(data);
+      setActiveJobId(data.job_id || null);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -129,6 +178,7 @@ function App() {
         { method: "POST" }
       );
       setWorkspace(data);
+      setActiveJobId(data.job_id || null);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -140,25 +190,46 @@ function App() {
     return <LoadingScreen />;
   }
 
-  // Granular access flags (backend enforces these too; this keeps the UI honest).
   const isCompanyAdmin = role === "company_admin" || role === "super_admin";
   const canManageResumes = hasPermission("manage_resumes");
   const canViewPipeline = hasPermission("view_pipeline");
   const canConductInterviews = hasPermission("conduct_interviews");
+  const canManageJobs = isCompanyAdmin || hasPermission("manage_jobs");
+  const canDeleteDrive = isCompanyAdmin || hasPermission("manage_drive_delete");
+  const maxJobs = workspace?.company?.max_jobs ?? 3;
+  const drives = workspace?.drives || [];
 
-  // If the active view is one the user isn't allowed to see, fall back to the
-  // dashboard so a restricted member can never land on a forbidden screen.
   const viewAllowed = (view) => {
     if (view === "resumes") return canManageResumes;
     if (view === "pipeline") return canViewPipeline;
-    if (view === "job" || view === "team") return isCompanyAdmin;
+    if (view === "job") return canManageJobs;
+    if (view === "team") return isCompanyAdmin;
+    if (view === "usage") return isCompanyAdmin || hasPermission("view_usage");
     return true;
   };
   const effectiveView = viewAllowed(activeView) ? activeView : "dashboard";
 
+  const driveProps = {
+    drives,
+    activeJobId,
+    onSwitchDrive: switchDrive,
+    onEditDrive: openEditDrive,
+    onDeleteDrive: deleteDrive,
+    onCreateDrive: openCreateDrive,
+    canCreateDrive: canManageJobs,
+    canDeleteDrive,
+    maxJobs,
+  };
+
   return (
     <div className="app-shell">
-      <Sidebar activeView={effectiveView} onViewChange={setActiveView} company={workspace?.company} />
+      <Sidebar
+        activeView={effectiveView}
+        onViewChange={setActiveView}
+        company={workspace?.company}
+        drives={drives}
+        activeJobId={activeJobId}
+      />
       <main className="main-panel">
         <Topbar
           title={titleFor(effectiveView)}
@@ -179,13 +250,22 @@ function App() {
             onStatusFilter={setStatusFilter}
             onQuery={setQuery}
             onCandidate={setSelectedCandidate}
-            onGoToJob={isCompanyAdmin ? () => setActiveView("job") : undefined}
+            onGoToJob={canManageJobs ? openCreateDrive : undefined}
             onGoToUpload={canManageResumes ? () => setActiveView("resumes") : undefined}
+            {...driveProps}
           />
         )}
 
         {effectiveView === "job" && (
-          <JobEditor job={workspace?.job} onSave={saveJob} saving={saving} />
+          <JobEditor
+            job={jobEditorMode === "create" ? null : workspace?.job}
+            jobId={jobEditorMode === "create" ? null : activeJobId}
+            mode={jobEditorMode}
+            driveCount={drives.length}
+            maxJobs={maxJobs}
+            onSave={saveJob}
+            saving={saving}
+          />
         )}
 
         {effectiveView === "resumes" && (
@@ -203,6 +283,8 @@ function App() {
 
         {effectiveView === "team" && <TeamManagementView />}
 
+        {effectiveView === "usage" && <UsageView />}
+
         {effectiveView === "settings" && <SettingsView />}
       </main>
 
@@ -216,10 +298,11 @@ function App() {
 function titleFor(view) {
   return {
     dashboard: "Hiring Dashboard",
-    job: "Job Setup",
+    job: "Job Drives",
     resumes: "Resume Intake",
     pipeline: "Hiring Pipeline",
     team: "Team Access Management",
+    usage: "Usage & Credits",
     settings: "Workspace Settings",
   }[view] || "Workspace";
 }
@@ -247,7 +330,6 @@ function Root() {
   const token = params.get("interview");
   const interviewType = params.get("type") || "technical";
 
-  // Public candidate interview sessions don't require workspace login
   if (token) {
     return <InterviewApp token={token} interviewType={interviewType} />;
   }

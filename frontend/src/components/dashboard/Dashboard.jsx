@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { Metric } from "../common/Metric";
 import { CandidateTable } from "./CandidateTable";
+import { DriveSelector } from "../job/DriveSelector";
 
 // Candidate pipeline filters shown in the dashboard dropdown. Kept next to the
 // predicate below so the labels and the matching logic never drift apart.
@@ -56,9 +57,18 @@ export function Dashboard({
   onCandidate,
   onGoToJob,
   onGoToUpload,
+  drives,
+  activeJobId,
+  onSwitchDrive,
+  onEditDrive,
+  onDeleteDrive,
+  onCreateDrive,
+  canCreateDrive,
+  canDeleteDrive,
+  maxJobs,
 }) {
-  const metrics = workspace.metrics;
-  const job = workspace.job;
+  const metrics = workspace?.metrics || {};
+  const job = workspace?.job || { title: "No drive selected", department: "", location: "", experience_years: 0, required_skills: [] };
 
   return (
     <section className="content-stack">
@@ -74,6 +84,18 @@ export function Dashboard({
 
       <section className="hero-band">
         <div className="hero-copy">
+          <DriveSelector
+            drives={drives}
+            activeJobId={activeJobId}
+            onSwitchDrive={onSwitchDrive}
+            onEditDrive={onEditDrive}
+            onDeleteDrive={onDeleteDrive}
+            onCreateDrive={onCreateDrive}
+            canCreateDrive={canCreateDrive}
+            canDeleteDrive={canDeleteDrive}
+            maxJobs={maxJobs}
+            compact
+          />
           <span className="pill">Active Job</span>
           <h2>{job.title}</h2>
           <p>{job.department} · {job.location} · {job.experience_years}+ years</p>

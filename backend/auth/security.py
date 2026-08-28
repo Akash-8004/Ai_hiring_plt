@@ -194,6 +194,28 @@ def require_permission(*required: str):
     return _checker
 
 
+async def require_job_manage(user: dict = Depends(get_current_user)) -> dict:
+    role = user.get("role")
+    perms = user.get("permissions", []) or []
+    if role in ("super_admin", "company_admin") or "manage_jobs" in perms or "*" in perms:
+        return user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have permission to perform this action.",
+    )
+
+
+async def require_drive_delete(user: dict = Depends(get_current_user)) -> dict:
+    role = user.get("role")
+    perms = user.get("permissions", []) or []
+    if role in ("super_admin", "company_admin") or "manage_drive_delete" in perms or "*" in perms:
+        return user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have permission to perform this action.",
+    )
+
+
 # ── Audit Logging ───────────────────────────────────────────────────────────
 
 def log_activity(

@@ -101,6 +101,22 @@ export function TeamManagementView() {
     }
   };
 
+  const handleToggleViewUsage = async (member) => {
+    const hasViewUsage = member.permissions?.includes("view_usage");
+    const newPerms = hasViewUsage
+      ? member.permissions.filter((p) => p !== "view_usage")
+      : [...(member.permissions || []), "view_usage"];
+    try {
+      await apiFetchJson(`/api/company/team/${member._id}`, {
+        method: "PUT",
+        body: JSON.stringify({ permissions: newPerms }),
+      });
+      await fetchTeam();
+    } catch (err) {
+      alert(err.message || "Failed to update permissions.");
+    }
+  };
+
   const handleCopyCredentials = () => {
     if (!createdUser) return;
     const text = `Name: ${createdUser.fullName}\nEmail: ${createdUser.email}\nTemporary Password: ${createdUser.password}\nLogin Portal: ${window.location.origin}`;
@@ -253,12 +269,21 @@ export function TeamManagementView() {
                     </td>
                     <td>
                       {member.role !== "company_admin" && (
-                        <button
-                          className={`btn btn-xs ${member.status === "active" ? "btn-danger" : "btn-primary"}`}
-                          onClick={() => handleToggleStatus(member._id, member.status)}
-                        >
-                          {member.status === "active" ? "Suspend" : "Activate"}
-                        </button>
+                        <div className="flex-row gap-2">
+                          <button
+                            className={`btn btn-xs ${member.permissions?.includes("view_usage") ? "btn-primary" : "btn-secondary"}`}
+                            onClick={() => handleToggleViewUsage(member)}
+                            title="Toggle View Usage permission"
+                          >
+                            {member.permissions?.includes("view_usage") ? "Usage On" : "Usage Off"}
+                          </button>
+                          <button
+                            className={`btn btn-xs ${member.status === "active" ? "btn-danger" : "btn-primary"}`}
+                            onClick={() => handleToggleStatus(member._id, member.status)}
+                          >
+                            {member.status === "active" ? "Suspend" : "Activate"}
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -392,6 +417,30 @@ export function TeamManagementView() {
                           onChange={() => handlePermissionToggle("manage_resumes")}
                         />
                         <span>Upload & Parse Resumes</span>
+                      </label>
+                      <label className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={permissions.includes("view_usage")}
+                          onChange={() => handlePermissionToggle("view_usage")}
+                        />
+                        <span>View Usage & Credits</span>
+                      </label>
+                      <label className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={permissions.includes("manage_jobs")}
+                          onChange={() => handlePermissionToggle("manage_jobs")}
+                        />
+                        <span>Create/Edit Job Drives</span>
+                      </label>
+                      <label className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={permissions.includes("manage_drive_delete")}
+                          onChange={() => handlePermissionToggle("manage_drive_delete")}
+                        />
+                        <span>Delete Job Drives</span>
                       </label>
                     </div>
                   </div>

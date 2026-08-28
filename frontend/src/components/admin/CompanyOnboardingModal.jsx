@@ -201,7 +201,7 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated }) {
                       onChange={(e) => setPlan(e.target.value)}
                     />
                     <div className="plan-name">Starter</div>
-                    <div className="plan-detail">Up to 5 Users · 3 Active Jobs</div>
+                    <div className="plan-detail">Up to 5 Users · 3 Active Jobs · 500 Credits/mo</div>
                   </label>
                   <label className={`plan-card ${plan === "growth" ? "selected" : ""}`}>
                     <input
@@ -212,7 +212,7 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated }) {
                       onChange={(e) => setPlan(e.target.value)}
                     />
                     <div className="plan-name">Growth</div>
-                    <div className="plan-detail">Up to 15 Users · 10 Active Jobs</div>
+                    <div className="plan-detail">Up to 15 Users · 10 Active Jobs · 2,000 Credits/mo</div>
                   </label>
                   <label className={`plan-card ${plan === "enterprise" ? "selected" : ""}`}>
                     <input
@@ -223,7 +223,7 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated }) {
                       onChange={(e) => setPlan(e.target.value)}
                     />
                     <div className="plan-name">Enterprise</div>
-                    <div className="plan-detail">Up to 50 Users · 50 Active Jobs</div>
+                    <div className="plan-detail">Up to 50 Users · 50 Active Jobs · 10,000 Credits/mo</div>
                   </label>
                 </div>
               </div>

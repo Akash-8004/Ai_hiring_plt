@@ -4,6 +4,7 @@ import {
   BriefcaseBusiness,
   Building2,
   ChevronDown,
+  Gauge,
   LayoutDashboard,
   LogOut,
   Settings,
@@ -13,7 +14,13 @@ import {
 } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
 
-export function Sidebar({ activeView, onViewChange, company }) {
+export function Sidebar({
+  activeView,
+  onViewChange,
+  company,
+  drives = [],
+  activeJobId,
+}) {
   const { user, role, logout, hasPermission } = useAuth();
   const [planOpen, setPlanOpen] = useState(false);
 
@@ -21,14 +28,21 @@ export function Sidebar({ activeView, onViewChange, company }) {
   const seatsUsed = company?.current_users;
   const maxUsers = company?.max_users;
   const maxJobs = company?.max_jobs;
+  const credits = company?.credits;
+  const creditsUsed = credits?.used;
+  const creditsAllowance = credits?.allowance;
+  const creditsRemaining = credits?.remaining;
+  const activeDrive = drives.find((d) => d.job_id === activeJobId);
 
   const isCompanyAdmin = role === "company_admin" || role === "super_admin";
+  const canManageJobs = isCompanyAdmin || hasPermission("manage_jobs");
 
   const navItems = [
     ["dashboard", LayoutDashboard, "Dashboard"],
-    ...(isCompanyAdmin ? [["job", BriefcaseBusiness, "Job Setup"]] : []),
+    ...(canManageJobs ? [["job", BriefcaseBusiness, "Job Drives"]] : []),
     ...(hasPermission("manage_resumes") ? [["resumes", Upload, "Resume Intake"]] : []),
     ...(hasPermission("view_pipeline") ? [["pipeline", BarChart3, "Pipeline"]] : []),
+    ...(isCompanyAdmin || hasPermission("view_usage") ? [["usage", Gauge, "Usage"]] : []),
     ...(isCompanyAdmin ? [["team", Users, "Team Access"]] : []),
     ["settings", Settings, "Settings"],
   ];
@@ -87,6 +101,25 @@ export function Sidebar({ activeView, onViewChange, company }) {
                 <li>
                   <span>Job postings</span>
                   <strong>Up to {maxJobs ?? "—"}</strong>
+                </li>
+                <li>
+                  <span>Job drives</span>
+                  <strong>{drives.length} / {maxJobs ?? "—"}</strong>
+                </li>
+                {activeDrive ? (
+                  <li>
+                    <span>Current drive</span>
+                    <strong className="truncate">{activeDrive.title}</strong>
+                  </li>
+                ) : null}
+                <li>
+                  <span>Credits</span>
+                  <strong>
+                    {creditsUsed != null && creditsAllowance != null
+                      ? `${creditsUsed} / ${creditsAllowance}`
+                      : "—"}
+                    {creditsRemaining != null ? ` (${creditsRemaining} left)` : ""}
+                  </strong>
                 </li>
               </ul>
               <p className="plan-popover-foot">Contact your platform admin to change your plan.</p>

@@ -79,6 +79,21 @@ class UpdateCompanyRequest(BaseModel):
     max_jobs: int | None = Field(default=None, ge=1, le=1000)
     industry: str | None = None
     contact_phone: str | None = None
+    price_adjustments: dict[str, float | None] | None = None
+    credits_adjustment: int | None = None
+
+
+class UpdateSubUserPermissionsRequest(BaseModel):
+    permissions: list[str]
+
+
+class AdjustCreditsRequest(BaseModel):
+    delta: int
+    note: str = ""
+
+
+class UpdatePlanPricingRequest(BaseModel):
+    prices: dict[str, float | None]
 
 
 # ── Response Models ─────────────────────────────────────────────────────────
@@ -114,12 +129,22 @@ class CompanyProfile(BaseModel):
     max_jobs: int
     current_users: int = 0
     created_at: str
+    credits: dict | None = None
+    plan_price: float | None = None
+
+
+VALID_PERMISSIONS = frozenset({
+    "manage_jobs", "manage_drive_delete", "manage_resumes", "conduct_interviews",
+    "view_pipeline", "manage_users", "view_usage",
+})
 
 
 # ── Plan Limits ─────────────────────────────────────────────────────────────
 
 PLAN_LIMITS = {
-    "starter": {"max_users": 5, "max_jobs": 3},
-    "growth": {"max_users": 15, "max_jobs": 10},
-    "enterprise": {"max_users": 50, "max_jobs": 50},
+    "starter": {"max_users": 5, "max_jobs": 3, "max_credits": 500},
+    "growth": {"max_users": 15, "max_jobs": 10, "max_credits": 2000},
+    "enterprise": {"max_users": 50, "max_jobs": 50, "max_credits": 10000},
 }
+
+PLAN_PRICES = {"starter": None, "growth": None, "enterprise": None}

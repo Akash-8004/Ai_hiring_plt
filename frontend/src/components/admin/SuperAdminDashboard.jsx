@@ -28,9 +28,9 @@ import { CompanyOnboardingModal } from "./CompanyOnboardingModal";
 import { ActivityLogViewer } from "./ActivityLogViewer";
 
 const PLAN_TIERS = [
-  { id: "starter", label: "Starter", max_users: 5, max_jobs: 3 },
-  { id: "growth", label: "Growth", max_users: 15, max_jobs: 10 },
-  { id: "enterprise", label: "Enterprise", max_users: 50, max_jobs: 50 },
+  { id: "starter", label: "Starter", max_users: 5, max_jobs: 3, max_credits: 500, price: null },
+  { id: "growth", label: "Growth", max_users: 15, max_jobs: 10, max_credits: 2000, price: null },
+  { id: "enterprise", label: "Enterprise", max_users: 50, max_jobs: 50, max_credits: 10000, price: null },
 ];
 
 export function SuperAdminDashboard() {
@@ -56,6 +56,14 @@ export function SuperAdminDashboard() {
   const [resetPasswordSuccess, setResetPasswordSuccess] = useState(null);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const resetPasswordInputRef = useRef(null);
+  const [planPricing, setPlanPricing] = useState({ starter: null, growth: null, enterprise: null });
+  const [draftPricing, setDraftPricing] = useState({ starter: "", growth: "", enterprise: "" });
+  const [pricingSaving, setPricingSaving] = useState(false);
+  const [companyUsage, setCompanyUsage] = useState(null);
+  const [usagePage, setUsagePage] = useState(1);
+  const [creditAdjustAmount, setCreditAdjustAmount] = useState("");
+  const [creditAdjustLoading, setCreditAdjustLoading] = useState(false);
+  const [companyDrives, setCompanyDrives] = useState(null);
 
   useEffect(() => {
     if (resetPasswordUserId && !resetPasswordSuccess && resetPasswordInputRef.current) {
@@ -68,14 +76,21 @@ export function SuperAdminDashboard() {
     setLoading(true);
     setError("");
     try {
-      const [statsData, companiesData, usersData] = await Promise.all([
+      const [statsData, companiesData, usersData, pricingData] = await Promise.all([
         apiFetchJson("/api/admin/stats"),
         apiFetchJson("/api/admin/companies"),
         apiFetchJson("/api/admin/users"),
+        apiFetchJson("/api/admin/plans/pricing"),
       ]);
       setStats(statsData);
       setCompanies(companiesData.companies || []);
       setUsers(usersData.users || []);
+      setPlanPricing(pricingData);
+      setDraftPricing({
+        starter: pricingData.starter != null ? String(pricingData.starter) : "",
+        growth: pricingData.growth != null ? String(pricingData.growth) : "",
+        enterprise: pricingData.enterprise != null ? String(pricingData.enterprise) : "",
+      });
     } catch (err) {
       setError(err.message || "Failed to load platform dashboard data.");
     } finally {
@@ -113,6 +128,43 @@ export function SuperAdminDashboard() {
     }
   };
 
+  const handleDeleteUser = async (u) => {
+    const cascades = u.role === "company_admin" && !!u.company_id;
+    const warn = cascades
+      ? `Deleting this company admin will also permanently remove every sub-user in their company. This cannot be undone.`
+      : `This will permanently delete this user. This cannot be undone.`;
+    if (!window.confirm(`Delete ${u.full_name} (${u.email})?\n\n${warn}`)) return;
+    try {
+      await apiFetchJson(`/api/admin/users/${u._id}`, { method: "DELETE" });
+      await refreshAllData();
+    } catch (err) {
+      alert(err.message || "Failed to delete user.");
+    }
+  };
+
+  const handleDeleteCompany = async (comp) => {
+    const confirmed = window.prompt(
+      `Permanently delete company "${comp.name}"?\n\nThis removes the company and ALL of its data (users, candidates, jobs, usage records). This cannot be undone.\n\nType the exact company name to confirm:`,
+      ""
+    );
+    if (confirmed === null) return;
+    if (confirmed.trim() !== comp.name) {
+      alert("Company name did not match. Deletion cancelled.");
+      return;
+    }
+    try {
+      await apiFetchJson(`/api/admin/companies/${comp._id}`, { method: "DELETE" });
+      if (expandedCompanyId === comp._id) {
+        setExpandedCompanyId(null);
+        setCompanyUsage(null);
+      setCompanyDrives(null);
+      }
+      await refreshAllData();
+    } catch (err) {
+      alert(err.message || "Failed to delete company.");
+    }
+  };
+
   const handleViewCompanyLogs = (companyId) => {
     setSelectedCompanyForLogs(companyId);
     setActiveTab("logs");
@@ -121,6 +173,8 @@ export function SuperAdminDashboard() {
   const handleToggleExpand = async (comp) => {
     if (expandedCompanyId === comp._id) {
       setExpandedCompanyId(null);
+      setCompanyUsage(null);
+      setCompanyDrives(null);
       setResetPasswordUserId(null);
       setNewPasswordInput("");
       setResetPasswordSuccess(null);
@@ -130,14 +184,101 @@ export function SuperAdminDashboard() {
     setExpandedCompanyId(comp._id);
     setDraftPlan(comp.plan || "starter");
     setExpandedUsers([]);
+    setCompanyUsage(null);
+    setCompanyDrives(null);
+    setUsagePage(1);
     setLoadingUsers(true);
     try {
-      const data = await apiFetchJson(`/api/admin/companies/${comp._id}/users`);
-      setExpandedUsers(data.users || []);
+      const [usersData, usageData, drivesData] = await Promise.all([
+        apiFetchJson(`/api/admin/companies/${comp._id}/users`),
+        apiFetchJson(`/api/admin/companies/${comp._id}/usage?page=1&limit=10`),
+        apiFetchJson(`/api/admin/companies/${comp._id}/drives`),
+      ]);
+      setExpandedUsers(usersData.users || []);
+      setCompanyUsage(usageData);
+      setCompanyDrives(drivesData);
     } catch (err) {
-      setError(err.message || "Failed to load company team members.");
+      setError(err.message || "Failed to load company details.");
     } finally {
       setLoadingUsers(false);
+    }
+  };
+
+  const loadCompanyUsage = async (companyId, page = 1) => {
+    try {
+      const usageData = await apiFetchJson(`/api/admin/companies/${companyId}/usage?page=${page}&limit=10`);
+      setCompanyUsage(usageData);
+      setUsagePage(page);
+    } catch (err) {
+      alert(err.message || "Failed to load usage data.");
+    }
+  };
+
+  const handleAdjustCredits = async (companyId, delta) => {
+    if (!delta) return;
+    setCreditAdjustLoading(true);
+    try {
+      await apiFetchJson(`/api/admin/companies/${companyId}/credits`, {
+        method: "POST",
+        body: JSON.stringify({ delta, note: `Manual ${delta > 0 ? "add" : "remove"} by Super Admin` }),
+      });
+      setCreditAdjustAmount("");
+      await loadCompanyUsage(companyId, usagePage);
+      await refreshAllData();
+    } catch (err) {
+      alert(err.message || "Failed to adjust credits.");
+    } finally {
+      setCreditAdjustLoading(false);
+    }
+  };
+
+  const loadCompanyDrives = async (companyId) => {
+    try {
+      const drivesData = await apiFetchJson(`/api/admin/companies/${companyId}/drives`);
+      setCompanyDrives(drivesData);
+    } catch (err) {
+      alert(err.message || "Failed to load drives.");
+    }
+  };
+
+  const handleDeleteDriveSa = async (companyId, drive) => {
+    const count = drive.candidate_count ?? 0;
+    const msg = `Delete drive "${drive.title}"? This permanently removes the drive and all ${count} of its candidates.`;
+    if (!window.confirm(msg)) return;
+    try {
+      await apiFetchJson(
+        `/api/job/${encodeURIComponent(drive.job_id)}?company_id=${encodeURIComponent(companyId)}`,
+        { method: "DELETE" }
+      );
+      await loadCompanyDrives(companyId);
+      await refreshAllData();
+    } catch (err) {
+      alert(err.message || "Failed to delete drive.");
+    }
+  };
+
+  const handleSavePricing = async () => {
+    setPricingSaving(true);
+    try {
+      const prices = {
+        starter: draftPricing.starter === "" ? null : Number(draftPricing.starter),
+        growth: draftPricing.growth === "" ? null : Number(draftPricing.growth),
+        enterprise: draftPricing.enterprise === "" ? null : Number(draftPricing.enterprise),
+      };
+      const updated = await apiFetchJson("/api/admin/plans/pricing", {
+        method: "PUT",
+        body: JSON.stringify({ prices }),
+      });
+      setPlanPricing(updated);
+      setDraftPricing({
+        starter: updated.starter != null ? String(updated.starter) : "",
+        growth: updated.growth != null ? String(updated.growth) : "",
+        enterprise: updated.enterprise != null ? String(updated.enterprise) : "",
+      });
+    } catch (err) {
+      alert(err.message || "Failed to save pricing.");
+    } finally {
+      setPricingSaving(false);
     }
   };
 
@@ -266,6 +407,12 @@ export function SuperAdminDashboard() {
             <Users size={16} /> All Platform Users ({users.length})
           </button>
           <button
+            className={`admin-tab-btn ${activeTab === "pricing" ? "active" : ""}`}
+            onClick={() => setActiveTab("pricing")}
+          >
+            <Layers size={16} /> Plans & Pricing
+          </button>
+          <button
             className={`admin-tab-btn ${activeTab === "logs" ? "active" : ""}`}
             onClick={() => {
               setSelectedCompanyForLogs(null);
@@ -391,6 +538,13 @@ export function SuperAdminDashboard() {
                             >
                               {comp.status === "active" ? "Suspend" : "Activate"}
                             </button>
+                            <button
+                              className="btn btn-xs btn-danger-ghost"
+                              title="Permanently delete this company and all its data"
+                              onClick={() => handleDeleteCompany(comp)}
+                            >
+                              Delete
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -437,6 +591,7 @@ export function SuperAdminDashboard() {
                     <th>Contact Info</th>
                     <th>Plan Tier</th>
                     <th>User Seats</th>
+                    <th>Credits</th>
                     <th>Status</th>
                     <th>Actions</th>
                   </tr>
@@ -444,7 +599,7 @@ export function SuperAdminDashboard() {
                 <tbody>
                   {filteredCompanies.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="text-center py-8 text-muted">
+                      <td colSpan={8} className="text-center py-8 text-muted">
                         No companies found. Click "Onboard Company" to create one.
                       </td>
                     </tr>
@@ -491,6 +646,13 @@ export function SuperAdminDashboard() {
                           </div>
                         </td>
                         <td>
+                          <span className="text-sm font-mono">
+                            {comp.credits
+                              ? `${comp.credits.used || 0} / ${comp.credits.allowance || 0}`
+                              : "—"}
+                          </span>
+                        </td>
+                        <td>
                           <span className={`badge status-badge ${comp.status === "active" ? "status-active" : "status-suspended"}`}>
                             {comp.status === "active" ? "Active" : "Suspended"}
                           </span>
@@ -510,13 +672,20 @@ export function SuperAdminDashboard() {
                             >
                               {comp.status === "active" ? "Suspend" : "Activate"}
                             </button>
+                            <button
+                              className="btn btn-xs btn-danger-ghost"
+                              title="Permanently delete this company and all its data"
+                              onClick={() => handleDeleteCompany(comp)}
+                            >
+                              Delete
+                            </button>
                           </div>
                         </td>
                       </tr>
 
                       {expandedCompanyId === comp._id && (
                         <tr className="company-expand-row">
-                          <td colSpan={7}>
+                          <td colSpan={8}>
                             <div className="company-expand-panel">
                               <div className="expand-section">
                                 <div className="expand-section-head">
@@ -537,8 +706,11 @@ export function SuperAdminDashboard() {
                                       />
                                       <span className="plan-option-name">{tier.label}</span>
                                       <span className="plan-option-limits">
-                                        {tier.max_users} users · {tier.max_jobs} jobs
+                                        {tier.max_users} users · {tier.max_jobs} jobs · {tier.max_credits.toLocaleString()} credits/mo
                                       </span>
+                                      {planPricing[tier.id] != null && (
+                                        <span className="plan-option-limits">${planPricing[tier.id]}/mo</span>
+                                      )}
                                       {comp.plan === tier.id && <span className="plan-current-tag">Current</span>}
                                     </label>
                                   ))}
@@ -554,6 +726,156 @@ export function SuperAdminDashboard() {
                                     ? "Current Plan"
                                     : `Change to ${PLAN_TIERS.find((t) => t.id === draftPlan)?.label}`}
                                 </button>
+                              </div>
+
+                              <div className="expand-section">
+                                <div className="expand-section-head">
+                                  <Activity size={15} /> <h4>Credit Usage</h4>
+                                </div>
+                                {companyUsage?.credits ? (
+                                  <>
+                                    <div className="usage-stat-grid">
+                                      <div>
+                                        <span className="usage-stat-label">Allowance</span>
+                                        <strong>{companyUsage.credits.allowance?.toLocaleString() ?? "—"}</strong>
+                                      </div>
+                                      <div>
+                                        <span className="usage-stat-label">Used</span>
+                                        <strong>{companyUsage.credits.used?.toLocaleString() ?? "—"}</strong>
+                                      </div>
+                                      <div>
+                                        <span className="usage-stat-label">Remaining</span>
+                                        <strong>{companyUsage.credits.remaining?.toLocaleString() ?? "—"}</strong>
+                                      </div>
+                                    </div>
+                                    <div className="progress-bar-bg mt-3">
+                                      <div
+                                        className="progress-bar-fill"
+                                        style={{
+                                          width: `${companyUsage.credits.allowance ? Math.min(100, ((companyUsage.credits.used || 0) / companyUsage.credits.allowance) * 100) : 0}%`,
+                                        }}
+                                      />
+                                    </div>
+                                    <div className="flex-row gap-2 mt-3 align-center">
+                                      <input
+                                        type="number"
+                                        className="input-field input-sm"
+                                        placeholder="Minutes"
+                                        value={creditAdjustAmount}
+                                        onChange={(e) => setCreditAdjustAmount(e.target.value)}
+                                        style={{ width: 120 }}
+                                      />
+                                      <button
+                                        className="btn btn-primary btn-xs"
+                                        disabled={creditAdjustLoading || !creditAdjustAmount}
+                                        onClick={() => handleAdjustCredits(comp._id, Number(creditAdjustAmount))}
+                                      >
+                                        Add Credits
+                                      </button>
+                                      <button
+                                        className="btn btn-danger btn-xs"
+                                        disabled={creditAdjustLoading || !creditAdjustAmount}
+                                        onClick={() => handleAdjustCredits(comp._id, -Number(creditAdjustAmount))}
+                                      >
+                                        Remove Credits
+                                      </button>
+                                    </div>
+                                    <table className="sub-users-table mt-4">
+                                      <thead>
+                                        <tr>
+                                          <th>Time</th>
+                                          <th>Candidate</th>
+                                          <th>Round</th>
+                                          <th>Min</th>
+                                          <th>Action</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {(companyUsage.usage?.entries || []).map((entry) => (
+                                          <tr key={entry._id || entry.created_at}>
+                                            <td className="text-xs text-muted">
+                                              {entry.created_at ? new Date(entry.created_at).toLocaleString() : "—"}
+                                            </td>
+                                            <td className="font-mono text-xs">{entry.candidate_email || "—"}</td>
+                                            <td>{entry.round_type}</td>
+                                            <td>{entry.minutes}</td>
+                                            <td>{entry.action}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                    {(companyUsage.usage?.total || 0) > 10 && (
+                                      <div className="flex-row gap-2 mt-2">
+                                        <button
+                                          className="btn btn-secondary btn-xs"
+                                          disabled={usagePage <= 1}
+                                          onClick={() => loadCompanyUsage(comp._id, usagePage - 1)}
+                                        >
+                                          Prev
+                                        </button>
+                                        <span className="text-xs text-muted">Page {usagePage}</span>
+                                        <button
+                                          className="btn btn-secondary btn-xs"
+                                          disabled={usagePage * 10 >= (companyUsage.usage?.total || 0)}
+                                          onClick={() => loadCompanyUsage(comp._id, usagePage + 1)}
+                                        >
+                                          Next
+                                        </button>
+                                      </div>
+                                    )}
+                                  </>
+                                ) : (
+                                  <p className="text-muted text-sm">No credit data available.</p>
+                                )}
+                              </div>
+
+                              <div className="expand-section">
+                                <div className="expand-section-head">
+                                  <Briefcase size={15} /> <h4>Job Drives & Pipeline</h4>
+                                </div>
+                                {companyDrives ? (
+                                  <>
+                                    <p className="text-sm text-muted mb-3">
+                                      {companyDrives.jobs_used ?? 0} of {companyDrives.max_jobs ?? 0} drives used
+                                    </p>
+                                    {(companyDrives.drives || []).length === 0 ? (
+                                      <p className="text-muted text-sm">No drives yet.</p>
+                                    ) : (
+                                      (companyDrives.drives || []).map((drive) => (
+                                        <div key={drive.job_id} className="sa-drive-card">
+                                          <div className="sa-drive-head">
+                                            <div>
+                                              <strong>{drive.title}</strong>
+                                              {drive.active && <span className="badge badge-subtle ml-2">Active</span>}
+                                              <p className="text-xs text-muted">
+                                                {drive.department} · {drive.location} · {drive.experience_years}+ yrs
+                                                {drive.created_at ? ` · ${new Date(drive.created_at).toLocaleDateString()}` : ""}
+                                              </p>
+                                            </div>
+                                            <button
+                                              type="button"
+                                              className="btn btn-danger btn-xs"
+                                              onClick={() => handleDeleteDriveSa(comp._id, drive)}
+                                            >
+                                              Delete Drive
+                                            </button>
+                                          </div>
+                                          <div className="usage-stat-grid mt-2">
+                                            <div><span className="usage-stat-label">Uploaded</span><strong>{drive.metrics?.uploaded ?? 0}</strong></div>
+                                            <div><span className="usage-stat-label">Shortlisted</span><strong>{drive.metrics?.shortlisted ?? 0}</strong></div>
+                                            <div><span className="usage-stat-label">HR Passed</span><strong>{drive.metrics?.hrPassed ?? 0}</strong></div>
+                                            <div><span className="usage-stat-label">Tech Passed</span><strong>{drive.metrics?.techPassed ?? 0}</strong></div>
+                                            <div><span className="usage-stat-label">Hired</span><strong>{drive.metrics?.hired ?? 0}</strong></div>
+                                            <div><span className="usage-stat-label">Avg Score</span><strong>{drive.metrics?.averageScore ?? 0}%</strong></div>
+                                          </div>
+                                          <p className="text-xs text-muted mt-2">{drive.candidate_count ?? 0} candidates</p>
+                                        </div>
+                                      ))
+                                    )}
+                                  </>
+                                ) : (
+                                  <p className="text-muted text-sm">Loading drives…</p>
+                                )}
                               </div>
 
                               <div className="expand-section">
@@ -818,12 +1140,21 @@ export function SuperAdminDashboard() {
                         </td>
                         <td>
                           {u.role !== "super_admin" && (
-                            <button
-                              className={`btn btn-xs ${u.status === "active" ? "btn-danger" : "btn-primary"}`}
-                              onClick={() => handleToggleUserStatus(u._id, u.status)}
-                            >
-                              {u.status === "active" ? "Suspend" : "Activate"}
-                            </button>
+                            <div className="action-group">
+                              <button
+                                className={`btn btn-xs ${u.status === "active" ? "btn-danger" : "btn-primary"}`}
+                                onClick={() => handleToggleUserStatus(u._id, u.status)}
+                              >
+                                {u.status === "active" ? "Suspend" : "Activate"}
+                              </button>
+                              <button
+                                className="btn btn-xs btn-danger-ghost"
+                                title="Permanently delete this user"
+                                onClick={() => handleDeleteUser(u)}
+                              >
+                                Delete
+                              </button>
+                            </div>
                           )}
                         </td>
                       </tr>
@@ -832,6 +1163,48 @@ export function SuperAdminDashboard() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {activeTab === "pricing" && (
+          <div className="admin-tab-content card">
+            <div className="card-header-flex">
+              <div className="card-title-group">
+                <Layers size={20} className="text-primary" />
+                <h2 className="card-title">Plans & Pricing</h2>
+              </div>
+            </div>
+            <p className="text-sm text-muted mt-2">
+              Set monthly USD prices for each plan tier. Leave empty for &quot;Not set&quot;.
+            </p>
+            <div className="plan-pricing-grid mt-4">
+              {PLAN_TIERS.map((tier) => (
+                <div key={tier.id} className="plan-pricing-row">
+                  <div>
+                    <strong>{tier.label}</strong>
+                    <p className="text-xs text-muted">
+                      {tier.max_users} users · {tier.max_jobs} jobs · {tier.max_credits.toLocaleString()} credits/mo
+                    </p>
+                  </div>
+                  <div className="flex-row gap-2 align-center">
+                    <span className="text-muted">$</span>
+                    <input
+                      type="number"
+                      className="input-field input-sm"
+                      placeholder="Not set"
+                      value={draftPricing[tier.id]}
+                      onChange={(e) => setDraftPricing({ ...draftPricing, [tier.id]: e.target.value })}
+                      min="0"
+                      step="0.01"
+                    />
+                    <span className="text-muted text-sm">/mo</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button className="btn btn-primary btn-sm mt-4" onClick={handleSavePricing} disabled={pricingSaving}>
+              {pricingSaving ? "Saving…" : "Save Pricing"}
+            </button>
           </div>
         )}
 

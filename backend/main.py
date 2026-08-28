@@ -12,7 +12,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, Depends
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -24,7 +24,7 @@ from backend.services.ai_ranker import AIRankingService
 from backend.services.HR_Round.hr_evaluator import HREvaluator
 from backend.services.Technical.interviewer import get_interviewer_prompt
 from backend.services.Technical.question_processor import QuestionProcessor
-from backend.services.ranking import score_candidates
+from backend.services.drive_metrics import compute_drive_metrics, score_candidates_for_drive
 from backend.services.resume_parser import parse_resume_text, parse_uploaded_resume
 from backend.services.Technical.technical_evaluator import TechnicalInterviewEvaluator
 from backend.services import r2_storage
@@ -35,6 +35,8 @@ from backend.auth.security import (
     log_activity,
     require_authenticated,
     require_company_admin,
+    require_drive_delete,
+    require_job_manage,
     require_permission,
 )
 from backend.auth.routes import router as auth_router
@@ -71,48 +73,45 @@ question_processor = QuestionProcessor()
 @app.on_event("startup")
 def seed_super_admin():
     """Create the initial Super Admin from .env if none exists."""
-    if database.count_super_admins() > 0:
-        return  # Already seeded
+    if database.count_super_admins() == 0:
+        email = os.getenv("SUPER_ADMIN_EMAIL", "admin@aihiring.com")
+        password = os.getenv("SUPER_ADMIN_PASSWORD", "Admin@123456")
 
-    email = os.getenv("SUPER_ADMIN_EMAIL", "admin@aihiring.com")
-    password = os.getenv("SUPER_ADMIN_PASSWORD", "Admin@123456")
+        if not database.get_user_by_email(email):
+            database.insert_user({
+                "email": email,
+                "password_hash": hash_password(password),
+                "full_name": "Super Admin",
+                "role": "super_admin",
+                "company_id": None,
+                "status": "active",
+                "permissions": ["*"],
+                "created_by": "system",
+                "created_at": datetime.now(timezone.utc),
+                "last_login": None,
+                "login_count": 0,
+                "active_session_token": None,
+            })
+            print(f"[OK] Super Admin seeded: {email}")
 
-    if database.get_user_by_email(email):
-        return  # Email already taken
+            database.insert_audit_log({
+                "actor_id": "system",
+                "actor_email": email,
+                "actor_role": "super_admin",
+                "company_id": None,
+                "action": "system.super_admin_seeded",
+                "category": "system",
+                "severity": "info",
+                "target_type": "user",
+                "target_id": None,
+                "target_label": f"Super Admin ({email})",
+                "metadata": {},
+                "ip_address": None,
+                "user_agent": None,
+                "timestamp": datetime.now(timezone.utc),
+            })
 
-    database.insert_user({
-        "email": email,
-        "password_hash": hash_password(password),
-        "full_name": "Super Admin",
-        "role": "super_admin",
-        "company_id": None,
-        "status": "active",
-        "permissions": ["*"],
-        "created_by": "system",
-        "created_at": datetime.now(timezone.utc),
-        "last_login": None,
-        "login_count": 0,
-        "active_session_token": None,
-    })
-    print(f"[OK] Super Admin seeded: {email}")
-
-    # Log the seeding event
-    database.insert_audit_log({
-        "actor_id": "system",
-        "actor_email": email,
-        "actor_role": "super_admin",
-        "company_id": None,
-        "action": "system.super_admin_seeded",
-        "category": "system",
-        "severity": "info",
-        "target_type": "user",
-        "target_id": None,
-        "target_label": f"Super Admin ({email})",
-        "metadata": {},
-        "ip_address": None,
-        "user_agent": None,
-        "timestamp": datetime.now(timezone.utc),
-    })
+    database.backfill_job_drives()
 
 
 # ── Pydantic Models ────────────────────────────────────────────────────────
@@ -130,6 +129,7 @@ class JobPayload(BaseModel):
     hr_interview_duration: int = Field(default=7, ge=3, le=60)
     technical_interview_duration: int = Field(default=5, ge=3, le=60)
     custom_questions: list[dict] = Field(default_factory=list)
+    job_id: str | None = None
 
 
 class ManualResumePayload(BaseModel):
@@ -157,30 +157,88 @@ def health() -> dict[str, str]:
 # ── Workspace (authenticated, scoped to company) ──────────────────────────
 
 @app.get("/api/workspace")
-def workspace(user: dict = Depends(require_authenticated)) -> dict[str, Any]:
+def workspace(
+    job_id: str | None = None,
+    user: dict = Depends(require_authenticated),
+) -> dict[str, Any]:
     company_id = str(user["company_id"]) if user.get("company_id") else None
-    return _workspace_payload(company_id, user)
+    return _workspace_payload(company_id, user, job_id=job_id)
 
 
 @app.put("/api/job")
 def update_job(
     payload: JobPayload,
-    user: dict = Depends(require_company_admin),
+    user: dict = Depends(require_job_manage),
     request: Request = None,
 ) -> dict[str, Any]:
     company_id = str(user["company_id"]) if user.get("company_id") else None
-    job = JobDescription(**payload.model_dump())
-    database.save_job(job, company_id)
-    database.clear_candidate_scores(company_id)
+    if not company_id:
+        raise HTTPException(status_code=400, detail="No company associated")
+    job = JobDescription(**payload.model_dump(exclude={"job_id"}))
+    effective_job_id = payload.job_id
+
+    if not effective_job_id:
+        count = database.count_jobs(company_id)
+        company = database.get_company_by_id(company_id)
+        max_jobs = (company or {}).get("max_jobs", 3)
+        if count >= max_jobs:
+            raise HTTPException(status_code=403, detail="Job drive limit reached")
+        stored = database.upsert_job(job, company_id)
+        effective_job_id = stored["job_id"]
+        database.set_active_drive(company_id, effective_job_id)
+        action = "job.created"
+    else:
+        if not database.get_job_by_id(company_id, effective_job_id):
+            raise HTTPException(status_code=404, detail="Drive not found")
+        database.upsert_job(job, company_id, job_id=effective_job_id)
+        action = "job.updated"
+
+    database.clear_candidate_scores(company_id, job_id=effective_job_id)
     log_activity(
-        action="job.updated",
+        action=action,
         category="job",
         actor=user,
         target_type="job",
+        target_id=effective_job_id,
         target_label=job.title,
         request=request,
     )
-    return _workspace_payload(company_id, user)
+    return _workspace_payload(company_id, user, job_id=effective_job_id)
+
+
+@app.delete("/api/job/{job_id}")
+def delete_job_drive(
+    job_id: str,
+    company_id: str | None = Query(None),
+    user: dict = Depends(require_drive_delete),
+    request: Request = None,
+) -> dict[str, Any]:
+    if user.get("role") == "super_admin" and company_id:
+        cid = company_id
+    elif user.get("company_id"):
+        cid = str(user["company_id"])
+    else:
+        raise HTTPException(status_code=400, detail="company_id required")
+
+    job_doc = database.get_job_doc(cid, job_id)
+    if not job_doc:
+        raise HTTPException(status_code=404, detail="Drive not found")
+    title = job_doc.get("title", job_id)
+    database.delete_job(cid, job_id)
+    log_activity(
+        action="job.deleted",
+        category="job",
+        actor=user,
+        target_type="job",
+        target_id=job_id,
+        target_label=title,
+        severity="critical",
+        request=request,
+    )
+    if database.get_active_drive(cid) == job_id:
+        remaining = database.list_jobs(cid)
+        database.set_active_drive(cid, remaining[0]["job_id"] if remaining else None)
+    return _workspace_payload(cid, user)
 
 
 @app.post("/api/job/questions/process")
@@ -224,8 +282,11 @@ def add_manual_resume(
     if not payload.text.strip():
         raise HTTPException(status_code=400, detail="Resume text is required.")
     company_id = str(user["company_id"]) if user.get("company_id") else None
+    job_id = _active_drive_id(company_id)
+    if not job_id:
+        raise HTTPException(status_code=400, detail="Create a job drive first")
     resume = parse_resume_text(payload.file_name, payload.text)
-    database.upsert_candidate(resume, company_id=company_id)
+    database.upsert_candidate(resume, company_id=company_id, job_id=job_id)
     log_activity(
         action="candidate.uploaded",
         category="candidate",
@@ -234,7 +295,7 @@ def add_manual_resume(
         target_label=f"{resume.full_name} ({resume.email})",
         request=request,
     )
-    return _workspace_payload(company_id, user)
+    return _workspace_payload(company_id, user, job_id=job_id)
 
 
 @app.post("/api/resumes/upload")
@@ -244,10 +305,13 @@ async def upload_resumes(
     request: Request = None,
 ) -> dict[str, Any]:
     company_id = str(user["company_id"]) if user.get("company_id") else None
+    job_id = _active_drive_id(company_id)
+    if not job_id:
+        raise HTTPException(status_code=400, detail="Create a job drive first")
     file_names = []
     for file in files:
         resume = _parse_uploaded_bytes(file.filename or "resume.txt", await file.read())
-        database.upsert_candidate(resume, company_id=company_id)
+        database.upsert_candidate(resume, company_id=company_id, job_id=job_id)
         file_names.append(file.filename)
     log_activity(
         action="candidate.bulk_uploaded",
@@ -256,7 +320,7 @@ async def upload_resumes(
         metadata={"count": len(files), "file_names": file_names},
         request=request,
     )
-    return _workspace_payload(company_id, user)
+    return _workspace_payload(company_id, user, job_id=job_id)
 
 
 @app.post("/api/resumes/sample")
@@ -264,11 +328,14 @@ def load_sample_resumes(
     user: dict = Depends(require_permission("manage_resumes")),
 ) -> dict[str, Any]:
     company_id = str(user["company_id"]) if user.get("company_id") else None
-    database.clear_candidates(company_id)
+    job_id = _active_drive_id(company_id)
+    if not job_id:
+        raise HTTPException(status_code=400, detail="Create a job drive first")
+    database.clear_candidates(company_id, job_id=job_id)
     for index, text in enumerate(SAMPLE_RESUMES):
         resume = parse_resume_text(f"sample_resume_{index + 1}.txt", text)
-        database.upsert_candidate(resume, company_id=company_id)
-    return _workspace_payload(company_id, user)
+        database.upsert_candidate(resume, company_id=company_id, job_id=job_id)
+    return _workspace_payload(company_id, user, job_id=job_id)
 
 
 @app.delete("/api/resumes")
@@ -277,7 +344,10 @@ def clear_resumes(
     request: Request = None,
 ) -> dict[str, Any]:
     company_id = str(user["company_id"]) if user.get("company_id") else None
-    database.clear_candidates(company_id)
+    job_id = _active_drive_id(company_id)
+    if not job_id:
+        raise HTTPException(status_code=400, detail="Create a job drive first")
+    database.clear_candidates(company_id, job_id=job_id)
     log_activity(
         action="candidate.all_cleared",
         category="candidate",
@@ -285,7 +355,7 @@ def clear_resumes(
         severity="critical",
         request=request,
     )
-    return _workspace_payload(company_id, user)
+    return _workspace_payload(company_id, user, job_id=job_id)
 
 
 # ── Invitation ──────────────────────────────────────────────────────────────
@@ -299,9 +369,10 @@ def invite_candidate(
 ) -> dict[str, Any]:
     """Generate an interview invitation link. interview_type can be 'technical' or 'hr'."""
     company_id = str(user["company_id"]) if user.get("company_id") else None
-    candidates = database.load_candidates(company_id)
-    if not any(c.email == email for c in candidates):
+    candidate_doc = database.get_candidate_doc(email, company_id)
+    if not candidate_doc:
         raise HTTPException(status_code=404, detail="Candidate not found.")
+    job_id = candidate_doc.get("job_id")
     token = secrets.token_urlsafe(12)
     invitation = {
         "token": token,
@@ -311,9 +382,9 @@ def invite_candidate(
     }
     # Store under the right invitation key
     if interview_type == "hr":
-        database.set_candidate_hr_invitation(email, invitation, company_id)
+        database.set_candidate_hr_invitation(email, invitation, company_id, job_id)
     else:
-        database.set_candidate_invitation(email, invitation, company_id)
+        database.set_candidate_invitation(email, invitation, company_id, job_id)
     log_activity(
         action=f"candidate.invited_{interview_type}",
         category="candidate",
@@ -324,10 +395,7 @@ def invite_candidate(
         metadata={"interview_type": interview_type},
         request=request,
     )
-    return _workspace_payload(company_id, user)
-
-
-# ── Interview Session (token-based, no login required) ─────────────────────
+    return _workspace_payload(company_id, user, job_id=_active_drive_id(company_id))
 
 @app.get("/api/interview/session/{token}")
 def interview_session(token: str) -> dict[str, Any]:
@@ -340,14 +408,15 @@ def interview_session(token: str) -> dict[str, Any]:
     if not candidate_doc:
         raise HTTPException(status_code=404, detail="Candidate not found.")
 
-    # Load resume from DB
-    candidates = database.load_candidates(company_id)
+    job_id = candidate_doc.get("job_id")
+    candidates = database.load_candidates(company_id, job_id=job_id)
     resume = next((c for c in candidates if c.email == email), None)
     if not resume:
         raise HTTPException(status_code=404, detail="Candidate not found.")
 
-    # Load company job
-    current_job = database.load_job(company_id) or DEFAULT_JOB
+    current_job = (
+        database.get_job_by_id(str(company_id), job_id) if company_id and job_id else None
+    ) or database.load_job(company_id) or DEFAULT_JOB
 
     # Determine interview type from the invitation
     invitation = candidate_doc.get("invitation") or {}
@@ -398,12 +467,19 @@ def evaluate_interview(payload: EvaluationPayload) -> dict[str, Any]:
     email, company_id = _candidate_ref_for_token(payload.token)
     if not email:
         raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
-    candidates = database.load_candidates(company_id)
+    candidate_doc = database.get_candidate_doc(email, company_id) or {}
+    job_id = candidate_doc.get("job_id")
+    candidates = database.load_candidates(company_id, job_id=job_id)
     resume = next((c for c in candidates if c.email == email), None)
     if not resume:
         raise HTTPException(status_code=404, detail="Candidate not found.")
-    current_job = database.load_job(company_id) or DEFAULT_JOB
-    return _run_interview_evaluation(email, resume, payload.interview_type, payload.transcript, current_job, company_id)
+    current_job = (
+        database.get_job_by_id(str(company_id), job_id) if company_id and job_id else None
+    ) or database.load_job(company_id) or DEFAULT_JOB
+    return _run_interview_evaluation(
+        email, resume, payload.interview_type, payload.transcript,
+        current_job, company_id, job_id=job_id,
+    )
 
 
 # ── Recording Upload & Playback ────────────────────────────────────────────
@@ -419,6 +495,9 @@ async def upload_recording(
     if not email:
         raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
 
+    candidate_doc = database.get_candidate_doc(email, company_id) or {}
+    job_id = candidate_doc.get("job_id")
+
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty recording file.")
@@ -426,7 +505,9 @@ async def upload_recording(
     recording_meta = await asyncio.to_thread(
         r2_storage.upload_recording, email, interview_type, file_bytes
     )
-    database.set_candidate_interview_recording(email, interview_type, recording_meta, company_id)
+    database.set_candidate_interview_recording(
+        email, interview_type, recording_meta, company_id, job_id
+    )
     return {"ok": True, "recording": recording_meta}
 
 
@@ -525,14 +606,17 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
         return
 
     candidate_doc = database.get_candidate_doc(email, company_id)
-    candidates = database.load_candidates(company_id)
+    job_id = (candidate_doc or {}).get("job_id")
+    candidates = database.load_candidates(company_id, job_id=job_id)
     resume = next((c for c in candidates if c.email == email), None)
     if not resume:
         await websocket.send_json({"type": "error", "message": "Candidate not found."})
         await websocket.close()
         return
 
-    current_job = database.load_job(company_id) or DEFAULT_JOB
+    current_job = (
+        database.get_job_by_id(str(company_id), job_id) if company_id and job_id else None
+    ) or database.load_job(company_id) or DEFAULT_JOB
     doc = candidate_doc or {}
     invitation = doc.get("invitation") or {}
     hr_invitation = doc.get("hr_invitation") or {}
@@ -561,14 +645,14 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
         text = " ".join(user_buffer).strip()
         if text:
             transcript.append({"role": "candidate", "content": text})
-            database.append_transcript_turn(email, "candidate", text, company_id=company_id)
+            database.append_transcript_turn(email, "candidate", text, company_id=company_id, job_id=job_id)
         user_buffer.clear()
 
     def flush_model_turn() -> None:
         text = " ".join(model_buffer).strip()
         if text:
             transcript.append({"role": "interviewer", "content": text})
-            database.append_transcript_turn(email, "interviewer", text, company_id=company_id)
+            database.append_transcript_turn(email, "interviewer", text, company_id=company_id, job_id=job_id)
         model_buffer.clear()
 
     async def send_ws(payload: dict) -> None:
@@ -609,6 +693,7 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
                             answer_text,
                             {"type": "written", "question": question},
                             company_id=company_id,
+                            job_id=job_id,
                         )
                         await to_gemini.put(
                             (
@@ -712,9 +797,19 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
                 await send_ws({"type": "turn_complete"})
                 if _interview_is_complete(transcript):
                     result = await asyncio.to_thread(
-                        _run_interview_evaluation, email, resume, interview_type, list(transcript), current_job, company_id
+                        _run_interview_evaluation,
+                        email, resume, interview_type, list(transcript), current_job, company_id, job_id,
                     )
-                    await send_ws({"type": "evaluation", "result": result})
+                    if result.get("blocked"):
+                        await send_ws({
+                            "type": "error",
+                            "message": result.get("message", "Insufficient interview credits."),
+                            "blocked": True,
+                            "credits": result.get("credits"),
+                            "required": result.get("required"),
+                        })
+                    else:
+                        await send_ws({"type": "evaluation", "result": result})
                     done.set()
                     try:
                         await websocket.close(code=1000)
@@ -757,18 +852,49 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
 
 # ── Workspace Payload ───────────────────────────────────────────────────────
 
-def _workspace_payload(company_id: str | None = None, user: dict | None = None) -> dict[str, Any]:
-    current_job = database.load_job(company_id) or DEFAULT_JOB
-    candidate_resumes = database.load_candidates(company_id)
-    results = score_candidates(candidate_resumes, current_job, ranking_service, company_id)
+def _active_drive_id(company_id: str | None) -> str | None:
+    if not company_id:
+        return None
+    active = database.get_active_drive(company_id)
+    if active:
+        return active
+    jobs = database.list_jobs(company_id)
+    return jobs[0]["job_id"] if jobs else None
+
+
+def _resolve_effective_job_id(company_id: str | None, job_id: str | None = None) -> str | None:
+    if not company_id:
+        return None
+    if job_id and database.get_job_by_id(company_id, job_id):
+        database.set_active_drive(company_id, job_id)
+        return job_id
+    active = database.get_active_drive(company_id)
+    if active and database.get_job_by_id(company_id, active):
+        return active
+    jobs = database.list_jobs(company_id)
+    if jobs:
+        database.set_active_drive(company_id, jobs[0]["job_id"])
+        return jobs[0]["job_id"]
+    return None
+
+
+def _workspace_payload(
+    company_id: str | None = None,
+    user: dict | None = None,
+    job_id: str | None = None,
+) -> dict[str, Any]:
+    effective_job_id = _resolve_effective_job_id(company_id, job_id) if company_id else None
+    drive = database.get_job_by_id(company_id, effective_job_id) if company_id and effective_job_id else None
+    current_job = drive or (database.load_job(company_id) if company_id else None) or DEFAULT_JOB
+    candidate_resumes = (
+        database.load_candidates(company_id, job_id=effective_job_id)
+        if company_id
+        else database.load_candidates()
+    )
+    results = score_candidates_for_drive(
+        candidate_resumes, current_job, company_id or "", effective_job_id or ""
+    )
     rows = []
-    hr_invited = 0
-    hr_interviewed = 0
-    hr_passed = 0
-    tech_invited = 0
-    tech_interviewed = 0
-    tech_passed = 0
-    hired = 0
 
     for result in results:
         row = result.to_row()
@@ -777,7 +903,9 @@ def _workspace_payload(company_id: str | None = None, user: dict | None = None) 
         row["github"] = result.candidate.github
         row["breakdown"] = result.score.breakdown
         row["uploadedAt"] = result.candidate.uploaded_at.isoformat()
-        doc = database.get_candidate_doc(result.candidate.email, company_id) or {}
+        doc = database.get_candidate_doc(
+            result.candidate.email, company_id, effective_job_id
+        ) or {}
         row["pipelineStage"] = doc.get("pipelineStage", "uploaded")
         row["invitation"] = doc.get("invitation")
         row["hr_invitation"] = doc.get("hr_invitation")
@@ -786,60 +914,47 @@ def _workspace_payload(company_id: str | None = None, user: dict | None = None) 
         row["hr_interview"] = doc.get("hr_interview")
         row["interview_transcript"] = doc.get("interview_transcript") or []
         row["recording"] = (doc.get("technical_interview") or {}).get("recording") or (doc.get("hr_interview") or {}).get("recording")
-
-        stage = row["pipelineStage"]
-        # HR pipeline stages
-        if stage in {"hr_invited", "hr_passed", "hr_failed", "invited", "tech_passed", "tech_failed", "hired"}:
-            hr_invited += 1
-        if stage in {"hr_passed", "hr_failed", "invited", "tech_passed", "tech_failed", "hired"}:
-            hr_interviewed += 1
-        if stage in {"hr_passed", "invited", "tech_passed", "tech_failed", "hired"}:
-            hr_passed += 1
-        # Technical pipeline stages (only after HR passed)
-        if stage in {"invited", "tech_passed", "tech_failed", "hired"}:
-            tech_invited += 1
-        if stage in {"tech_passed", "tech_failed", "hired"}:
-            tech_interviewed += 1
-        if stage in {"tech_passed", "hired"}:
-            tech_passed += 1
-        if stage == "hired":
-            hired += 1
-
         rows.append(row)
 
-    shortlisted = len([result for result in results if result.status == "Shortlisted"])
-    rejected = len([result for result in results if result.status == "Rejected"])
-    average = round(sum(result.score.total_score for result in results) / len(results)) if results else 0
+    metrics = compute_drive_metrics(
+        candidate_resumes, company_id or "", effective_job_id or "", current_job
+    )
+    metrics.pop("candidate_count", None)
 
-    # Build company info from user context
+    drives = []
+    if company_id:
+        for d in database.list_jobs(company_id):
+            jid = d["job_id"]
+            drives.append({
+                "job_id": jid,
+                "title": d.get("title", ""),
+                "department": d.get("department", ""),
+                "status": d.get("status", "active"),
+                "candidate_count": len(database.load_candidates(company_id, job_id=jid)),
+            })
+
     company_info = {"name": "AI Hiring Platform", "plan": "starter", "role": "user"}
     if user:
         company_info["role"] = user.get("role", "user")
         if user.get("company_id"):
-            company = database.get_company_by_id(str(user["company_id"]))
+            cid = str(user["company_id"])
+            company = database.get_company_by_id(cid)
             if company:
                 company_info["name"] = company.get("name", "Unknown")
                 company_info["plan"] = company.get("plan", "starter")
                 company_info["max_users"] = company.get("max_users")
                 company_info["max_jobs"] = company.get("max_jobs")
-                company_info["current_users"] = database.count_company_users(str(user["company_id"]))
+                company_info["current_users"] = database.count_company_users(cid)
+                company_info["credits"] = database.get_company_credits(cid)
+                prices = database.get_plan_prices()
+                company_info["plan_price"] = prices.get(company.get("plan", "starter"))
 
     return {
         "company": company_info,
         "job": asdict(current_job),
-        "metrics": {
-            "uploaded": len(candidate_resumes),
-            "shortlisted": shortlisted,
-            "rejected": rejected,
-            "averageScore": average,
-            "hrInvited": hr_invited,
-            "hrInterviewed": hr_interviewed,
-            "hrPassed": hr_passed,
-            "techInvited": tech_invited,
-            "techInterviewed": tech_interviewed,
-            "techPassed": tech_passed,
-            "hired": hired,
-        },
+        "job_id": effective_job_id,
+        "drives": drives,
+        "metrics": metrics,
         "screening": {
             "provider": ranking_service.last_provider_used,
             "model": ranking_service.model,
@@ -872,8 +987,46 @@ def _sanitized_questions(custom_questions: list[dict]) -> list[dict]:
 def _run_interview_evaluation(
     email: str, resume: ParsedResume, interview_type: str, transcript: list[dict],
     current_job: JobDescription | None = None, company_id: str | None = None,
+    job_id: str | None = None,
 ) -> dict[str, Any]:
     """Score an interview transcript and persist the result + pipeline stage."""
+    job = current_job or DEFAULT_JOB
+    round_type = "technical" if interview_type == "technical" else "hr"
+    minutes = (
+        job.technical_interview_duration
+        if interview_type == "technical"
+        else job.hr_interview_duration
+    )
+
+    if company_id:
+        consume_result = database.consume_credits(str(company_id), minutes)
+        credits_bucket = database.get_company_credits(str(company_id))
+        if not consume_result.get("ok"):
+            database.log_usage(
+                email, str(company_id),
+                minutes=minutes, round_type=round_type, action="blocked",
+                detail=f"Required {minutes} credits, had {consume_result.get('remaining', 0)}",
+            )
+            log_activity(
+                action="credits.insufficient",
+                category="credits",
+                actor={"_id": "system", "email": "system", "role": "system", "company_id": company_id},
+                target_type="company",
+                target_id=str(company_id),
+                target_label=email,
+                metadata={"required": minutes, "remaining": consume_result.get("remaining", 0)},
+                severity="critical",
+            )
+            return {
+                "blocked": True,
+                "credits": credits_bucket,
+                "required": minutes,
+                "message": (
+                    f"Insufficient interview credits. This {round_type} round requires "
+                    f"{minutes} credits but only {consume_result.get('remaining', 0)} remain."
+                ),
+            }
+
     if interview_type == "technical":
         result = technical_evaluator.evaluate(resume.raw_text, transcript)
         result.setdefault("provider_used", "gemini" if technical_evaluator.api_key else "local")
@@ -886,7 +1039,7 @@ def _run_interview_evaluation(
             result["provider_error"] = hr_evaluator.last_error
 
     # Preserve existing recording metadata if the interview doc already has one
-    existing_doc = database.get_candidate_doc(email, company_id) or {}
+    existing_doc = database.get_candidate_doc(email, company_id, job_id) or {}
     existing_interview = existing_doc.get(
         "technical_interview" if interview_type == "technical" else "hr_interview"
     ) or {}
@@ -904,9 +1057,25 @@ def _run_interview_evaluation(
         interview["recording"] = recording
 
     if interview_type == "technical":
-        database.set_candidate_technical_interview(email, interview, company_id)
+        database.set_candidate_technical_interview(email, interview, company_id, job_id)
     else:
-        database.set_candidate_hr_interview(email, interview, company_id)
+        database.set_candidate_hr_interview(email, interview, company_id, job_id)
+
+    if company_id:
+        database.log_usage(
+            email, str(company_id),
+            minutes=minutes, round_type=round_type, action="consume",
+            detail=f"{round_type} interview evaluation",
+        )
+        log_activity(
+            action="credits.consumed",
+            category="credits",
+            actor={"_id": "system", "email": "system", "role": "system", "company_id": company_id},
+            target_type="company",
+            target_id=str(company_id),
+            target_label=email,
+            metadata={"minutes": minutes, "round_type": round_type},
+        )
 
     return {"email": email, "interview_type": interview_type, **result}
 
