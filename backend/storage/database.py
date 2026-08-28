@@ -264,7 +264,8 @@ def load_job(company_id: str | None = None) -> JobDescription | None:
     valid = {
         "title", "department", "location", "experience_years",
         "required_skills", "nice_to_have_skills", "education",
-        "description", "threshold", "custom_questions",
+        "description", "threshold", "hr_interview_duration",
+        "technical_interview_duration", "custom_questions",
     }
     return JobDescription(**{k: v for k, v in doc.items() if k in valid})
 
@@ -280,6 +281,8 @@ def save_job(job: JobDescription, company_id: str | None = None) -> None:
         "education": job.education,
         "description": job.description,
         "threshold": job.threshold,
+        "hr_interview_duration": job.hr_interview_duration,
+        "technical_interview_duration": job.technical_interview_duration,
         "custom_questions": job.custom_questions,
     }
     if company_id:

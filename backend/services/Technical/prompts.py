@@ -93,18 +93,90 @@ OUTPUT JSON:
 # Interviewer prompt — sent to Gemini Live as the system instruction
 # ---------------------------------------------------------------------------
 
-# Testing mode: keep the live interview short (3-5 minutes). Flip to True to
-# restore the full 15-20 minute structure below.
-USE_FULL_STRUCTURE = False
+
+def _interview_structure(duration: int) -> str:
+    """Build a dynamically-timed interview structure based on the configured
+    duration (in minutes).  Section proportions are fixed; absolute times
+    scale with *duration*."""
+
+    # proportional splits (must sum to 1.0)
+    opening_pct = 0.10
+    background_pct = 0.15
+    core_pct = 0.30
+    problem_pct = 0.25
+    scenario_pct = 0.10
+    closing_pct = 0.10
+
+    def mins(pct):
+        secs = round(duration * 60 * pct)
+        if secs < 30:
+            return f"{secs} sec"
+        m = secs // 60
+        s = secs % 60
+        return f"{m} min {s} sec" if s else f"{m} min"
+
+    # round to nearest 30 sec for cleaner display
+    def round30(secs):
+        return int(round(secs / 30) * 30)
+
+    total_secs = duration * 60
+    opening_s = round30(total_secs * opening_pct)
+    background_s = round30(total_secs * background_pct)
+    core_s = round30(total_secs * core_pct)
+    problem_s = round30(total_secs * problem_pct)
+    scenario_s = round30(total_secs * scenario_pct)
+    closing_s = round30(total_secs * closing_pct)
+
+    def fmt(secs):
+        if secs < 60:
+            return f"{secs} sec"
+        m = secs // 60
+        s = secs % 60
+        return f"{m} min {s} sec" if s else f"{m} min"
+
+    wrap = round(duration * 0.85)
+
+    return f"""
+INTERVIEW STRUCTURE ({duration} minutes total):
+
+1. OPENING ({fmt(opening_s)})
+   - Greet the candidate warmly by name and introduce yourself as Rohan from the engineering team.
+   - Quick ice-breaker to set a collaborative tone.
+
+2. TECHNICAL BACKGROUND ({fmt(background_s)})
+   - Ask about a recent technical challenge or a project on their resume.
+   - Follow up briefly on technologies and architecture decisions.
+
+3. CORE TECHNICAL QUESTIONS ({fmt(core_s)})
+   - Ask 2-4 short technical questions relevant to the role, one at a time.
+   - If the answer is vague, probe deeper once.
+   - Cover data structures, language concepts, or system design as appropriate.
+
+4. PROBLEM SOLVING ({fmt(problem_s)})
+   - Present ONE coding/design problem based on the candidate's level.
+   - Ask them to think through the approach verbally.
+   - Discuss time/space complexity and edge cases.
+   - If they do well, ask how they would optimize further.
+
+5. REAL-WORLD SCENARIOS ({fmt(scenario_s)})
+   - Ask one scenario question (debugging production issues, improving performance, or code review).
+
+6. CLOSING ({fmt(closing_s)})
+   - Ask if they have questions about the team or role.
+   - Thank them warmly.
+   - End the interview by saying EXACTLY: "The interview is now complete. Thank you for joining." followed by your name. Do not add any further questions after this.
+
+TIMING (CRITICAL):
+- The whole session must wrap up around the {wrap}-minute mark.
+- Once you say "The interview is now complete.", do not ask anything else.
+""".strip()
 
 
 def build_technical_interviewer_prompt(job: JobDescription, resume: ParsedResume) -> str:
     """Build the system instruction that Gemini Live uses while conducting the
     technical interview in real-time voice mode."""
 
-    structure = (
-        _full_interview_structure(job, resume) if USE_FULL_STRUCTURE else _short_interview_structure()
-    )
+    structure = _interview_structure(job.technical_interview_duration)
     custom_questions = _custom_questions_block(job)
 
     return f"""
@@ -144,75 +216,6 @@ IMPORTANT RULES:
 - Do not reveal the ideal solution immediately
 - Do not mention internal scoring
 - This is a TECHNICAL round — focus on engineering skills, not HR/culture
-""".strip()
-
-
-def _short_interview_structure() -> str:
-    """Concise 3-5 minute interview for fast testing. Kept deliberately small;
-    the full structure can be restored by flipping USE_FULL_STRUCTURE."""
-    return """
-INTERVIEW STRUCTURE (3-5 minutes total — keep it short for this session):
-1. OPENING (30 sec): Greet the candidate warmly by name and introduce yourself as Rohan from the engineering team. Ask one quick ice-breaker.
-2. TECHNICAL BACKGROUND (1-1.5 min): Ask about one recent technical challenge or a project on their resume. Follow up briefly.
-3. CORE QUESTIONS (1.5-2.5 min): Ask 2-3 short technical questions relevant to the role, one at a time. If the answer is vague, probe deeper once.
-4. WRAP-UP (30 sec): Ask if they have questions, thank them, and end by saying EXACTLY: "The interview is now complete. Thank you for joining." Do not add any further questions after this.
-
-TIMING (CRITICAL):
-- The whole session must wrap up around the 4-minute mark.
-- Once you say "The interview is now complete.", do not ask anything else.
-""".strip()
-
-
-def _full_interview_structure(job: JobDescription, resume: ParsedResume) -> str:
-    """Full 15-20 minute interview structure (the original detailed prompt)."""
-    return f"""
-INTERVIEW STRUCTURE (15-20 minutes total):
-
-1. OPENING (2-3 mins)
-   - Greet the candidate warmly: "Hi {resume.full_name}! I'm Rohan from the engineering team."
-   - "We'll work through some technical topics together today - treat this like pair programming."
-   - "You can use any language you're comfortable with. Think out loud."
-   - Quick ice-breaker: "What's your favorite programming language and why?"
-
-2. TECHNICAL BACKGROUND (3-4 mins)
-   - "Tell me about a recent technical challenge you solved"
-   - "Which project on your resume are you most proud of technically?"
-   - Ask follow-ups about technologies, architecture decisions, trade-offs
-   - Listen and note technologies mentioned
-
-3. CORE TECHNICAL QUESTIONS (5-7 mins)
-   Ask questions relevant to the candidate's resume and the role:
-   - Data structures and algorithms fundamentals
-   - Programming language concepts
-   - Database and API design
-   - Frontend/backend architecture (based on role)
-   - Debugging and testing approaches
-   Ask one question at a time. Wait for the answer before moving on.
-   If the answer is vague, probe deeper. If the candidate is stuck, offer a small hint.
-
-4. PROBLEM SOLVING (3-5 mins)
-   Present ONE coding/design problem based on the candidate's level:
-   - Ask them to think through the approach verbally
-   - Discuss time and space complexity
-   - Ask about edge cases
-   - "How would you test this?"
-   - If they do well: "How would you optimize further?"
-
-5. REAL-WORLD SCENARIOS (2-3 mins)
-   Ask one scenario question:
-   - "How would you debug a production issue?"
-   - "How would you improve a slow API?"
-   - "How would you review another developer's code?"
-
-6. CLOSING (1-2 mins)
-   - "Do you have any questions about the engineering team or the role?"
-   - Thank the candidate warmly
-   - End the interview by saying EXACTLY: "The interview is now complete. Thank you for joining." followed by your name. Do not add any further questions after this.
-
-TIMING (CRITICAL):
-- The session must wrap up around the 8-minute mark of the conversation.
-- Around 7 minutes, move to the closing section.
-- Once you say "The interview is now complete.", do not ask anything else.
 """.strip()
 
 

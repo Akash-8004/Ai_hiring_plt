@@ -33,6 +33,8 @@ export function JobEditor({ job, onSave, saving }) {
       ...form,
       experience_years: Number(form.experience_years),
       threshold: Number(form.threshold),
+      hr_interview_duration: Number(form.hr_interview_duration) || 7,
+      technical_interview_duration: Number(form.technical_interview_duration) || 5,
       required_skills: splitCsv(form.required_skills),
       nice_to_have_skills: splitCsv(form.nice_to_have_skills),
       custom_questions: questions
@@ -128,6 +130,14 @@ export function JobEditor({ job, onSave, saving }) {
           <textarea value={form.nice_to_have_skills} onChange={(event) => update("nice_to_have_skills", event.target.value)} rows={4} />
         </label>
         <Field label="Education" value={form.education} onChange={(value) => update("education", value)} />
+        <label className="field">
+          <span>HR Round Duration (minutes)</span>
+          <input type="number" min="3" max="60" value={form.hr_interview_duration || 7} onChange={(event) => update("hr_interview_duration", event.target.value)} />
+        </label>
+        <label className="field">
+          <span>Technical Round Duration (minutes)</span>
+          <input type="number" min="3" max="60" value={form.technical_interview_duration || 5} onChange={(event) => update("technical_interview_duration", event.target.value)} />
+        </label>
         <label className="field full">
           <span>Shortlist threshold: {form.threshold}%</span>
           <input type="range" min="40" max="100" value={form.threshold} onChange={(event) => update("threshold", event.target.value)} />

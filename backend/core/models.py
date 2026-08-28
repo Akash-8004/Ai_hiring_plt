@@ -14,6 +14,8 @@ class JobDescription:
     education: str
     description: str
     threshold: int = 80
+    hr_interview_duration: int = 7
+    technical_interview_duration: int = 5
     custom_questions: list[dict] = field(default_factory=list)
 
 

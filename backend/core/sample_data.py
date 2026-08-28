@@ -15,6 +15,8 @@ DEFAULT_JOB = JobDescription(
         "in Python, FastAPI, PostgreSQL, Docker, REST APIs, and production debugging."
     ),
     threshold=80,
+    hr_interview_duration=7,
+    technical_interview_duration=5,
 )
 
 

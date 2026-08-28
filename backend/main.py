@@ -127,6 +127,8 @@ class JobPayload(BaseModel):
     education: str
     description: str
     threshold: int = Field(ge=40, le=100)
+    hr_interview_duration: int = Field(default=7, ge=3, le=60)
+    technical_interview_duration: int = Field(default=5, ge=3, le=60)
     custom_questions: list[dict] = Field(default_factory=list)
 
 

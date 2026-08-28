@@ -165,6 +165,34 @@ def build_hr_interviewer_prompt(job: JobDescription, resume: ParsedResume) -> st
     """Build the system instruction that Gemini Live uses while conducting the
     HR interview in real-time voice mode."""
 
+    duration = job.hr_interview_duration
+    total_secs = duration * 60
+
+    # proportional splits (must sum to 1.0)
+    opening_pct = 0.14
+    background_pct = 0.28
+    behavioral_pct = 0.28
+    cultural_pct = 0.17
+    closing_pct = 0.13
+
+    def round30(secs):
+        return int(round(secs / 30) * 30)
+
+    def fmt(secs):
+        if secs < 60:
+            return f"{secs} sec"
+        m = secs // 60
+        s = secs % 60
+        return f"{m} min {s} sec" if s else f"{m} min"
+
+    opening_s = round30(total_secs * opening_pct)
+    background_s = round30(total_secs * background_pct)
+    behavioral_s = round30(total_secs * behavioral_pct)
+    cultural_s = round30(total_secs * cultural_pct)
+    closing_s = round30(total_secs * closing_pct)
+
+    wrap = round(duration * 0.85)
+
     return f"""
 You are Priya, an HR Manager conducting an interview on behalf of the hiring company.
 
@@ -185,19 +213,19 @@ Detected skills: {", ".join(resume.skills)}
 RESUME TEXT:
 {resume.raw_text[:6000]}
 
-INTERVIEW STRUCTURE (5-10 minutes total):
-1. WARM OPENING (1 min): Greet the candidate warmly by name, introduce yourself as Priya from the HR team, and ask them to briefly introduce themselves.
+INTERVIEW STRUCTURE ({duration} minutes total):
+1. WARM OPENING ({fmt(opening_s)}): Greet the candidate warmly by name, introduce yourself as Priya from the HR team, and ask them to briefly introduce themselves.
 
-2. BACKGROUND & MOTIVATION (2 min): Ask about their career journey, what attracted them to this role, and what they are looking for in their next position.
+2. BACKGROUND & MOTIVATION ({fmt(background_s)}): Ask about their career journey, what attracted them to this role, and what they are looking for in their next position.
 
-3. BEHAVIORAL ASSESSMENT (2-3 min): Use STAR probing — ask about a significant workplace challenge, how they handled a difficult team situation, or how they managed a tight deadline. Dig deeper with follow-ups.
+3. BEHAVIORAL ASSESSMENT ({fmt(behavioral_s)}): Use STAR probing — ask about a significant workplace challenge, how they handled a difficult team situation, or how they managed a tight deadline. Dig deeper with follow-ups.
 
-4. CULTURAL FIT & WORK STYLE (1-2 min): Ask about their preferred work style, ideal work environment, how they handle feedback, and their approach to work-life balance.
+4. CULTURAL FIT & WORK STYLE ({fmt(cultural_s)}): Ask about their preferred work style, ideal work environment, how they handle feedback, and their approach to work-life balance.
 
-5. CLOSING (1 min): Ask if they have questions, thank them for their time, then end by saying EXACTLY: "The interview is now complete. Thank you for joining." Do not add any further questions after this.
+5. CLOSING ({fmt(closing_s)}): Ask if they have questions, thank them for their time, then end by saying EXACTLY: "The interview is now complete. Thank you for joining." Do not add any further questions after this.
 
 TIMING (CRITICAL):
-- The whole session must wrap up around the 7-minute mark.
+- The whole session must wrap up around the {wrap}-minute mark.
 - Once you say "The interview is now complete.", do not ask anything else.
 
 TONE & STYLE:
