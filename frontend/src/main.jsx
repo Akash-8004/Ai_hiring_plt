@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import "./styles.css";
 
 import { AuthProvider } from "./components/auth/AuthProvider";
@@ -17,6 +18,10 @@ import { SettingsView } from "./components/settings/SettingsView";
 import { UsageView } from "./components/usage/UsageView";
 import { LoadingScreen } from "./components/common/LoadingScreen";
 import { InterviewApp } from "./components/interview/InterviewApp";
+import { LandingPage } from "./components/marketing/LandingPage";
+import { FeaturesPage } from "./components/marketing/FeaturesPage";
+import { PricingPage } from "./components/marketing/PricingPage";
+import { BookDemoPage } from "./components/marketing/BookDemoPage";
 import { useAuth } from "./hooks/useAuth";
 import { apiFetchJson } from "./utils/api";
 
@@ -307,38 +312,60 @@ function titleFor(view) {
   }[view] || "Workspace";
 }
 
-function AuthRouter() {
+function LoginRoute() {
+  const { isAuthenticated, loading } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!loading && isAuthenticated) {
+      navigate("/app", { replace: true });
+    }
+  }, [isAuthenticated, loading, navigate]);
+
+  if (loading) return <LoadingScreen />;
+  if (isAuthenticated) return null;
+  return <LoginPage />;
+}
+
+function ProtectedApp() {
   const { isAuthenticated, loading, role } = useAuth();
 
-  if (loading) {
-    return <LoadingScreen />;
-  }
-
-  if (!isAuthenticated) {
-    return <LoginPage />;
-  }
-
-  if (role === "super_admin") {
-    return <SuperAdminDashboard />;
-  }
-
+  if (loading) return <LoadingScreen />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (role === "super_admin") return <SuperAdminDashboard />;
   return <App />;
 }
 
-function Root() {
+function InterviewGate({ children }) {
   const params = new URLSearchParams(window.location.search);
   const token = params.get("interview");
-  const interviewType = params.get("type") || "technical";
-
   if (token) {
-    return <InterviewApp token={token} interviewType={interviewType} />;
+    return <InterviewApp token={token} interviewType={params.get("type") || "technical"} />;
   }
+  return children;
+}
 
+function AppRouter() {
   return (
-    <AuthProvider>
-      <AuthRouter />
-    </AuthProvider>
+    <Routes>
+      <Route path="/" element={<LandingPage />} />
+      <Route path="/features" element={<FeaturesPage />} />
+      <Route path="/pricing" element={<PricingPage />} />
+      <Route path="/book-a-demo" element={<BookDemoPage />} />
+      <Route path="/contact" element={<Navigate to="/book-a-demo" replace />} />
+      <Route path="/login" element={<LoginRoute />} />
+      <Route path="/app/*" element={<ProtectedApp />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
 
-createRoot(document.getElementById("root")).render(<Root />);
+createRoot(document.getElementById("root")).render(
+  <InterviewGate>
+    <BrowserRouter>
+      <AuthProvider>
+        <AppRouter />
+      </AuthProvider>
+    </BrowserRouter>
+  </InterviewGate>
+);

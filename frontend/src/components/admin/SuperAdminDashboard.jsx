@@ -21,11 +21,13 @@ import {
   Copy,
   Eye,
   EyeOff,
+  Inbox,
 } from "lucide-react";
 import { apiFetchJson } from "../../utils/api";
 import { useAuth } from "../../hooks/useAuth";
 import { CompanyOnboardingModal } from "./CompanyOnboardingModal";
 import { ActivityLogViewer } from "./ActivityLogViewer";
+import { LeadsPanel } from "./LeadsPanel";
 
 const PLAN_TIERS = [
   { id: "starter", label: "Starter", max_users: 5, max_jobs: 3, max_credits: 500, price: null },
@@ -35,8 +37,10 @@ const PLAN_TIERS = [
 
 export function SuperAdminDashboard() {
   const { user, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState("overview"); // 'overview' | 'companies' | 'users' | 'logs'
+  const [activeTab, setActiveTab] = useState("overview");
   const [stats, setStats] = useState(null);
+  const [newLeadCount, setNewLeadCount] = useState(0);
+  const [onboardingLead, setOnboardingLead] = useState(null);
   const [companies, setCompanies] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -57,7 +61,11 @@ export function SuperAdminDashboard() {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const resetPasswordInputRef = useRef(null);
   const [planPricing, setPlanPricing] = useState({ starter: null, growth: null, enterprise: null });
-  const [draftPricing, setDraftPricing] = useState({ starter: "", growth: "", enterprise: "" });
+  const [draftPlans, setDraftPlans] = useState({
+    starter: { price: "", max_users: "5", max_jobs: "3" },
+    growth: { price: "", max_users: "15", max_jobs: "10" },
+    enterprise: { price: "", max_users: "50", max_jobs: "50" },
+  });
   const [pricingSaving, setPricingSaving] = useState(false);
   const [companyUsage, setCompanyUsage] = useState(null);
   const [usagePage, setUsagePage] = useState(1);
@@ -76,20 +84,34 @@ export function SuperAdminDashboard() {
     setLoading(true);
     setError("");
     try {
-      const [statsData, companiesData, usersData, pricingData] = await Promise.all([
+      const [statsData, companiesData, usersData, pricingData, leadsData] = await Promise.all([
         apiFetchJson("/api/admin/stats"),
         apiFetchJson("/api/admin/companies"),
         apiFetchJson("/api/admin/users"),
         apiFetchJson("/api/admin/plans/pricing"),
+        apiFetchJson("/api/admin/leads?status=new&limit=1").catch(() => ({ total: 0 })),
       ]);
       setStats(statsData);
       setCompanies(companiesData.companies || []);
       setUsers(usersData.users || []);
+      setNewLeadCount(leadsData.total || 0);
       setPlanPricing(pricingData);
-      setDraftPricing({
-        starter: pricingData.starter != null ? String(pricingData.starter) : "",
-        growth: pricingData.growth != null ? String(pricingData.growth) : "",
-        enterprise: pricingData.enterprise != null ? String(pricingData.enterprise) : "",
+      setDraftPlans({
+        starter: {
+          price: pricingData.starter?.price != null ? String(pricingData.starter.price) : "",
+          max_users: String(pricingData.starter?.max_users ?? 5),
+          max_jobs: String(pricingData.starter?.max_jobs ?? 3),
+        },
+        growth: {
+          price: pricingData.growth?.price != null ? String(pricingData.growth.price) : "",
+          max_users: String(pricingData.growth?.max_users ?? 15),
+          max_jobs: String(pricingData.growth?.max_jobs ?? 10),
+        },
+        enterprise: {
+          price: pricingData.enterprise?.price != null ? String(pricingData.enterprise.price) : "",
+          max_users: String(pricingData.enterprise?.max_users ?? 50),
+          max_jobs: String(pricingData.enterprise?.max_jobs ?? 50),
+        },
       });
     } catch (err) {
       setError(err.message || "Failed to load platform dashboard data.");
@@ -260,26 +282,49 @@ export function SuperAdminDashboard() {
   const handleSavePricing = async () => {
     setPricingSaving(true);
     try {
-      const prices = {
-        starter: draftPricing.starter === "" ? null : Number(draftPricing.starter),
-        growth: draftPricing.growth === "" ? null : Number(draftPricing.growth),
-        enterprise: draftPricing.enterprise === "" ? null : Number(draftPricing.enterprise),
-      };
+      const plans = {};
+      for (const tier of PLAN_TIERS) {
+        const draft = draftPlans[tier.id];
+        plans[tier.id] = {
+          price: draft.price === "" ? null : Number(draft.price),
+          max_users: Number(draft.max_users),
+          max_jobs: Number(draft.max_jobs),
+        };
+      }
       const updated = await apiFetchJson("/api/admin/plans/pricing", {
         method: "PUT",
-        body: JSON.stringify({ prices }),
+        body: JSON.stringify({ plans }),
       });
       setPlanPricing(updated);
-      setDraftPricing({
-        starter: updated.starter != null ? String(updated.starter) : "",
-        growth: updated.growth != null ? String(updated.growth) : "",
-        enterprise: updated.enterprise != null ? String(updated.enterprise) : "",
+      setDraftPlans({
+        starter: {
+          price: updated.starter?.price != null ? String(updated.starter.price) : "",
+          max_users: String(updated.starter?.max_users ?? 5),
+          max_jobs: String(updated.starter?.max_jobs ?? 3),
+        },
+        growth: {
+          price: updated.growth?.price != null ? String(updated.growth.price) : "",
+          max_users: String(updated.growth?.max_users ?? 15),
+          max_jobs: String(updated.growth?.max_jobs ?? 10),
+        },
+        enterprise: {
+          price: updated.enterprise?.price != null ? String(updated.enterprise.price) : "",
+          max_users: String(updated.enterprise?.max_users ?? 50),
+          max_jobs: String(updated.enterprise?.max_jobs ?? 50),
+        },
       });
     } catch (err) {
-      alert(err.message || "Failed to save pricing.");
+      alert(err.message || "Failed to save plan settings.");
     } finally {
       setPricingSaving(false);
     }
+  };
+
+  const updateDraftPlan = (tierId, field, value) => {
+    setDraftPlans((prev) => ({
+      ...prev,
+      [tierId]: { ...prev[tierId], [field]: value },
+    }));
   };
 
   const handleChangePlan = async (companyId) => {
@@ -335,6 +380,16 @@ export function SuperAdminDashboard() {
       () => alert("Password copied to clipboard!"),
       () => alert("Failed to copy.")
     );
+  };
+
+  const handleConvertLead = (lead) => {
+    setOnboardingLead(lead);
+    setOnboardingOpen(true);
+  };
+
+  const handleOnboardingClose = () => {
+    setOnboardingOpen(false);
+    setOnboardingLead(null);
   };
 
   const filteredCompanies = companies.filter((c) => {
@@ -405,6 +460,12 @@ export function SuperAdminDashboard() {
             onClick={() => setActiveTab("users")}
           >
             <Users size={16} /> All Platform Users ({users.length})
+          </button>
+          <button
+            className={`admin-tab-btn ${activeTab === "leads" ? "active" : ""}`}
+            onClick={() => setActiveTab("leads")}
+          >
+            <Inbox size={16} /> Leads {newLeadCount > 0 ? `(${newLeadCount})` : ""}
           </button>
           <button
             className={`admin-tab-btn ${activeTab === "pricing" ? "active" : ""}`}
@@ -706,10 +767,10 @@ export function SuperAdminDashboard() {
                                       />
                                       <span className="plan-option-name">{tier.label}</span>
                                       <span className="plan-option-limits">
-                                        {tier.max_users} users · {tier.max_jobs} jobs · {tier.max_credits.toLocaleString()} credits/mo
+                                        {(planPricing[tier.id]?.max_users ?? tier.max_users)} users · {(planPricing[tier.id]?.max_jobs ?? tier.max_jobs)} jobs · {tier.max_credits.toLocaleString()} credits/mo
                                       </span>
-                                      {planPricing[tier.id] != null && (
-                                        <span className="plan-option-limits">${planPricing[tier.id]}/mo</span>
+                                      {planPricing[tier.id]?.price != null && (
+                                        <span className="plan-option-limits">${planPricing[tier.id].price}/mo</span>
                                       )}
                                       {comp.plan === tier.id && <span className="plan-current-tag">Current</span>}
                                     </label>
@@ -1166,6 +1227,10 @@ export function SuperAdminDashboard() {
           </div>
         )}
 
+        {activeTab === "leads" && (
+          <LeadsPanel onConvertLead={handleConvertLead} onRefresh={refreshAllData} />
+        )}
+
         {activeTab === "pricing" && (
           <div className="admin-tab-content card">
             <div className="card-header-flex">
@@ -1175,7 +1240,7 @@ export function SuperAdminDashboard() {
               </div>
             </div>
             <p className="text-sm text-muted mt-2">
-              Set monthly USD prices for each plan tier. Leave empty for &quot;Not set&quot;.
+              Configure monthly price, user seat cap, and job drive limit for each plan tier.
             </p>
             <div className="plan-pricing-grid mt-4">
               {PLAN_TIERS.map((tier) => (
@@ -1183,27 +1248,50 @@ export function SuperAdminDashboard() {
                   <div>
                     <strong>{tier.label}</strong>
                     <p className="text-xs text-muted">
-                      {tier.max_users} users · {tier.max_jobs} jobs · {tier.max_credits.toLocaleString()} credits/mo
+                      {tier.max_credits.toLocaleString()} credits/mo (default allowance)
                     </p>
                   </div>
-                  <div className="flex-row gap-2 align-center">
-                    <span className="text-muted">$</span>
-                    <input
-                      type="number"
-                      className="input-field input-sm"
-                      placeholder="Not set"
-                      value={draftPricing[tier.id]}
-                      onChange={(e) => setDraftPricing({ ...draftPricing, [tier.id]: e.target.value })}
-                      min="0"
-                      step="0.01"
-                    />
-                    <span className="text-muted text-sm">/mo</span>
+                  <div className="plan-pricing-fields">
+                    <div className="plan-pricing-field">
+                      <label className="text-xs text-muted">Max users</label>
+                      <input
+                        type="number"
+                        className="input-field input-sm"
+                        value={draftPlans[tier.id].max_users}
+                        onChange={(e) => updateDraftPlan(tier.id, "max_users", e.target.value)}
+                        min="1"
+                        max="500"
+                      />
+                    </div>
+                    <div className="plan-pricing-field">
+                      <label className="text-xs text-muted">Max jobs</label>
+                      <input
+                        type="number"
+                        className="input-field input-sm"
+                        value={draftPlans[tier.id].max_jobs}
+                        onChange={(e) => updateDraftPlan(tier.id, "max_jobs", e.target.value)}
+                        min="1"
+                        max="1000"
+                      />
+                    </div>
+                    <div className="plan-pricing-field">
+                      <label className="text-xs text-muted">Price ($/mo)</label>
+                      <input
+                        type="number"
+                        className="input-field input-sm"
+                        placeholder="Not set"
+                        value={draftPlans[tier.id].price}
+                        onChange={(e) => updateDraftPlan(tier.id, "price", e.target.value)}
+                        min="0"
+                        step="0.01"
+                      />
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
             <button className="btn btn-primary btn-sm mt-4" onClick={handleSavePricing} disabled={pricingSaving}>
-              {pricingSaving ? "Saving…" : "Save Pricing"}
+              {pricingSaving ? "Saving…" : "Save Plan Settings"}
             </button>
           </div>
         )}
@@ -1219,8 +1307,19 @@ export function SuperAdminDashboard() {
       {/* Company Onboarding Modal */}
       <CompanyOnboardingModal
         isOpen={onboardingOpen}
-        onClose={() => setOnboardingOpen(false)}
+        onClose={handleOnboardingClose}
         onCompanyCreated={refreshAllData}
+        leadId={onboardingLead?._id}
+        initialData={onboardingLead ? {
+          company_name: onboardingLead.company_name,
+          industry: onboardingLead.industry || "Technology",
+          contact_email: onboardingLead.work_email,
+          contact_phone: onboardingLead.phone || "",
+          contact_name: onboardingLead.contact_name,
+          admin_name: onboardingLead.contact_name,
+          admin_email: onboardingLead.work_email,
+        } : null}
+        onLeadConverted={refreshAllData}
       />
     </div>
   );

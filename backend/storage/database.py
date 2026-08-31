@@ -27,6 +27,7 @@ _companies = _db["companies"]
 _audit_log = _db["audit_log"]
 _usage_log = _db["usage_log"]
 _plans_config = _db["plans_config"]
+_leads = _db["leads"]
 
 # ── Indexes ─────────────────────────────────────────────────────────────────
 try:
@@ -51,6 +52,9 @@ try:
     _jobs.create_index([("company_id", 1), ("job_id", 1)], unique=True)
     _jobs.create_index("company_id")
     _usage_log.create_index([("company_id", 1), ("created_at", DESCENDING)])
+    _leads.create_index("work_email")
+    _leads.create_index("status")
+    _leads.create_index([("created_at", DESCENDING)])
 except Exception:
     pass
 
@@ -256,9 +260,54 @@ def _fresh_credits_bucket(allowance: int, period: str | None = None) -> dict:
 
 
 def _company_allowance(company: dict) -> int:
-    from backend.auth.models import PLAN_LIMITS
     plan = company.get("plan", "starter")
-    return PLAN_LIMITS.get(plan, PLAN_LIMITS["starter"])["max_credits"]
+    return get_plan_limits(plan)["max_credits"]
+
+
+def get_plans_config() -> dict:
+    from backend.auth.models import PLAN_LIMITS, PLAN_PRICES
+
+    doc = _plans_config.find_one({"_id": "pricing"}) or {}
+    stored_limits = doc.get("limits", {})
+    stored_prices = doc.get("prices", {})
+    result = {}
+    for plan_id, defaults in PLAN_LIMITS.items():
+        overrides = stored_limits.get(plan_id, {})
+        result[plan_id] = {
+            "price": stored_prices.get(plan_id, PLAN_PRICES.get(plan_id)),
+            "max_users": overrides.get("max_users", defaults["max_users"]),
+            "max_jobs": overrides.get("max_jobs", defaults["max_jobs"]),
+            "max_credits": overrides.get("max_credits", defaults["max_credits"]),
+        }
+    return result
+
+
+def get_plan_limits(plan: str) -> dict:
+    cfg = get_plans_config().get(plan) or get_plans_config()["starter"]
+    return {
+        "max_users": cfg["max_users"],
+        "max_jobs": cfg["max_jobs"],
+        "max_credits": cfg["max_credits"],
+    }
+
+
+def set_plans_config(plan_updates: dict) -> dict:
+    doc = _plans_config.find_one({"_id": "pricing"}) or {}
+    prices = dict(doc.get("prices", {}))
+    limits = {k: dict(v) for k, v in doc.get("limits", {}).items()}
+    for plan_id, fields in plan_updates.items():
+        if fields.get("price") is not None or "price" in fields:
+            prices[plan_id] = fields.get("price")
+        tier_limits = limits.setdefault(plan_id, {})
+        for key in ("max_users", "max_jobs", "max_credits"):
+            if fields.get(key) is not None:
+                tier_limits[key] = fields[key]
+    _plans_config.update_one(
+        {"_id": "pricing"},
+        {"$set": {"prices": prices, "limits": limits, "updated_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    return get_plans_config()
 
 
 def init_company_credits(company_id: str, allowance: int) -> None:
@@ -454,24 +503,12 @@ def get_usage_log(
 
 
 def get_plan_prices() -> dict:
-    from backend.auth.models import PLAN_PRICES
-    doc = _plans_config.find_one({"_id": "pricing"})
-    if not doc:
-        return dict(PLAN_PRICES)
-    prices = dict(PLAN_PRICES)
-    prices.update(doc.get("prices", {}))
-    return prices
+    return {plan_id: cfg["price"] for plan_id, cfg in get_plans_config().items()}
 
 
 def set_plan_prices(prices: dict) -> dict:
-    current = get_plan_prices()
-    current.update(prices)
-    _plans_config.update_one(
-        {"_id": "pricing"},
-        {"$set": {"prices": current, "updated_at": datetime.now(timezone.utc)}},
-        upsert=True,
-    )
-    return current
+    plan_updates = {plan_id: {"price": price} for plan_id, price in prices.items()}
+    return set_plans_config(plan_updates)
 
 
 def get_platform_credit_stats() -> dict:
@@ -1015,3 +1052,76 @@ def append_transcript_turn(
         _candidate_filter(email, company_id, job_id),
         {"$push": {"interview_transcript": turn}},
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LEADS (demo requests)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def insert_lead(doc: dict) -> str:
+    result = _leads.insert_one(doc)
+    return str(result.inserted_id)
+
+
+def get_lead_by_id(lead_id: str) -> dict | None:
+    try:
+        doc = _leads.find_one({"_id": ObjectId(lead_id)})
+    except Exception:
+        return None
+    if not doc:
+        return None
+    doc["_id"] = str(doc["_id"])
+    return doc
+
+
+def list_leads(status: str | None = None, page: int = 1, limit: int = 50) -> dict:
+    query: dict = {}
+    if status:
+        query["status"] = status
+    total = _leads.count_documents(query)
+    skip = max(0, (page - 1) * limit)
+    cursor = _leads.find(query).sort("created_at", DESCENDING).skip(skip).limit(limit)
+    leads = []
+    for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        leads.append(doc)
+    return {"leads": leads, "total": total, "page": page, "limit": limit}
+
+
+def update_lead(lead_id: str, updates: dict) -> bool:
+    try:
+        oid = ObjectId(lead_id)
+    except Exception:
+        return False
+    note = updates.pop("append_note", None)
+    set_fields = {k: v for k, v in updates.items() if v is not None}
+    if note:
+        note_entry = {
+            "text": note.get("text", ""),
+            "by": note.get("by", ""),
+            "at": datetime.now(timezone.utc),
+        }
+        result = _leads.update_one(
+            {"_id": oid},
+            {"$set": set_fields, "$push": {"notes": note_entry}},
+        )
+    elif set_fields:
+        result = _leads.update_one({"_id": oid}, {"$set": set_fields})
+    else:
+        return _leads.find_one({"_id": oid}) is not None
+    return result.matched_count > 0
+
+
+def delete_lead(lead_id: str) -> bool:
+    try:
+        result = _leads.delete_one({"_id": ObjectId(lead_id)})
+        return result.deleted_count > 0
+    except Exception:
+        return False
+
+
+def count_leads(status: str | None = None) -> int:
+    query: dict = {}
+    if status:
+        query["status"] = status
+    return _leads.count_documents(query)

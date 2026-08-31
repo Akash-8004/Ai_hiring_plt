@@ -1,8 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { X, Building2, User, Mail, Lock, Shield, CheckCircle, Copy, Phone } from "lucide-react";
 import { apiFetchJson } from "../../utils/api";
 
-export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated }) {
+export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, initialData, leadId, onLeadConverted }) {
   const [companyName, setCompanyName] = useState("");
   const [industry, setIndustry] = useState("Technology");
   const [contactEmail, setContactEmail] = useState("");
@@ -16,6 +16,20 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated }) {
   const [error, setError] = useState("");
   const [successData, setSuccessData] = useState(null);
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (initialData) {
+      setCompanyName(initialData.company_name || "");
+      setIndustry(initialData.industry || "Technology");
+      setContactEmail(initialData.contact_email || "");
+      setContactPhone(initialData.contact_phone || "");
+      setPlan(initialData.plan || "starter");
+      setAdminName(initialData.admin_name || initialData.contact_name || "");
+      setAdminEmail(initialData.admin_email || initialData.contact_email || "");
+      setAdminPassword(initialData.admin_password || "");
+    }
+  }, [isOpen, initialData]);
 
   if (!isOpen) return null;
 
@@ -44,10 +58,27 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated }) {
         adminEmail: adminEmail.trim(),
         adminPassword: adminPassword,
         plan,
+        companyId: data.company_id,
       });
 
+      if (leadId) {
+        try {
+          await apiFetchJson(`/api/admin/leads/${leadId}`, {
+            method: "PUT",
+            body: JSON.stringify({
+              status: "converted",
+              converted_company_id: data.company_id,
+              note: `Converted to company ${companyName.trim()}`,
+            }),
+          });
+          if (onLeadConverted) onLeadConverted(data.company_id);
+        } catch {
+          // company created; lead update is best-effort
+        }
+      }
+
       if (onCompanyCreated) {
-        onCompanyCreated();
+        onCompanyCreated(data);
       }
     } catch (err) {
       setError(err.message || "Failed to onboard company.");
@@ -66,8 +97,10 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated }) {
 
   const handleClose = () => {
     setCompanyName("");
+    setIndustry("Technology");
     setContactEmail("");
     setContactPhone("");
+    setPlan("starter");
     setAdminName("");
     setAdminEmail("");
     setAdminPassword("");

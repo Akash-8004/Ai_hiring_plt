@@ -41,15 +41,19 @@ from backend.auth.security import (
 )
 from backend.auth.routes import router as auth_router
 from backend.admin.routes import admin_router, company_router
+from backend.leads.routes import router as leads_router
 
 
 app = FastAPI(title="AI Hiring Platform API", version="0.2.0")
 
+_cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+_extra_cors = os.getenv("CORS_ALLOWED_ORIGINS", "")
+if _extra_cors:
+    _cors_origins.extend(o.strip() for o in _extra_cors.split(",") if o.strip())
+
 app.add_middleware(
     CORSMiddleware,
-    # Explicit origins for the canonical dev port; the regex additionally allows
-    # any localhost port so login still works when Vite falls back to 5174/5175/…
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_cors_origins,
     allow_origin_regex=r"https?://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
@@ -60,6 +64,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(company_router)
+app.include_router(leads_router)
 
 # ── Shared services (stateless, safe to share) ─────────────────────────────
 ranking_service = AIRankingService()

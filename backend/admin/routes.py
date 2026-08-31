@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from backend.auth.models import (
-    PLAN_LIMITS,
     AdjustCreditsRequest,
     CreateCompanyRequest,
     CreateSubUserRequest,
@@ -68,7 +67,7 @@ def create_company(body: CreateCompanyRequest, user: dict = Depends(require_supe
     if database.get_user_by_email(body.admin_email):
         raise HTTPException(status_code=400, detail="Admin email already in use")
 
-    limits = PLAN_LIMITS.get(body.plan, PLAN_LIMITS["starter"])
+    limits = database.get_plan_limits(body.plan)
 
     company_doc = {
         "name": body.company_name,
@@ -154,7 +153,7 @@ def update_company(
     changes = {}
     plan_changed = False
     if body.plan is not None:
-        limits = PLAN_LIMITS.get(body.plan, PLAN_LIMITS["starter"])
+        limits = database.get_plan_limits(body.plan)
         changes["plan"] = {"from": company["plan"], "to": body.plan}
         updates["plan"] = body.plan
         updates["max_users"] = limits["max_users"]
@@ -173,7 +172,7 @@ def update_company(
         database.update_company(company_id, updates)
 
     if plan_changed and body.plan is not None:
-        new_limits = PLAN_LIMITS.get(body.plan, PLAN_LIMITS["starter"])
+        new_limits = database.get_plan_limits(body.plan)
         database.apply_plan_credit_change(company_id, new_limits["max_credits"])
 
     if body.credits_adjustment is not None and body.credits_adjustment != 0:
@@ -502,7 +501,7 @@ def admin_adjust_credits(
 
 @admin_router.get("/plans/pricing")
 def get_plan_pricing(user: dict = Depends(require_super_admin)):
-    return database.get_plan_prices()
+    return database.get_plans_config()
 
 
 @admin_router.put("/plans/pricing")
@@ -511,15 +510,19 @@ def update_plan_pricing(
     user: dict = Depends(require_super_admin),
     request: Request = None,
 ):
-    prices = database.set_plan_prices(body.prices)
+    updates = {
+        plan_id: tier.model_dump(exclude_unset=True)
+        for plan_id, tier in body.plans.items()
+    }
+    config = database.set_plans_config(updates)
     log_activity(
         action="plans.pricing_updated",
         category="billing",
         actor=user,
-        metadata={"prices": body.prices},
+        metadata={"plans": updates},
         request=request,
     )
-    return prices
+    return config
 
 
 @admin_router.get("/companies/{company_id}/drives")
@@ -611,7 +614,7 @@ def create_sub_user(
 
     # Check plan limit
     current_count = database.count_company_users(company_id)
-    max_users = company.get("max_users", PLAN_LIMITS["starter"]["max_users"])
+    max_users = company.get("max_users", database.get_plan_limits(company.get("plan", "starter"))["max_users"])
     if current_count >= max_users:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -776,7 +779,7 @@ def company_billing(user: dict = Depends(require_permission("view_usage"))):
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
     plan = company.get("plan", "starter")
-    limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["starter"])
+    limits = database.get_plan_limits(plan)
     prices = database.get_plan_prices()
     return {
         "plan": plan,

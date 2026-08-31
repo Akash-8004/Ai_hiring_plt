@@ -92,8 +92,14 @@ class AdjustCreditsRequest(BaseModel):
     note: str = ""
 
 
+class PlanTierUpdate(BaseModel):
+    price: float | None = None
+    max_users: int | None = Field(default=None, ge=1, le=500)
+    max_jobs: int | None = Field(default=None, ge=1, le=1000)
+
+
 class UpdatePlanPricingRequest(BaseModel):
-    prices: dict[str, float | None]
+    plans: dict[str, PlanTierUpdate]
 
 
 # ── Response Models ─────────────────────────────────────────────────────────
