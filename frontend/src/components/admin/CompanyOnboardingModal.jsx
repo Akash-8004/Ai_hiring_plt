@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { X, Building2, User, Mail, Lock, Shield, CheckCircle, Copy, Phone } from "lucide-react";
+import { X, Building2, User, Mail, Lock, Shield, CheckCircle, Copy, Phone, Loader2 } from "lucide-react";
 import { apiFetchJson } from "../../utils/api";
 
 export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, initialData, leadId, onLeadConverted }) {
@@ -16,6 +16,8 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, init
   const [error, setError] = useState("");
   const [successData, setSuccessData] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailSent, setEmailSent] = useState(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -95,6 +97,29 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, init
     setTimeout(() => setCopied(false), 2500);
   };
 
+  const handleSendCredentialsEmail = async () => {
+    if (!successData) return;
+    setEmailSending(true);
+    setEmailSent(null);
+    try {
+      const res = await apiFetchJson(
+        `/api/admin/companies/${successData.companyId}/send-credentials`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            admin_email: successData.adminEmail,
+            admin_password: successData.adminPassword,
+          }),
+        }
+      );
+      setEmailSent(res.ok ? "sent" : "failed");
+    } catch {
+      setEmailSent("failed");
+    } finally {
+      setEmailSending(false);
+    }
+  };
+
   const handleClose = () => {
     setCompanyName("");
     setIndustry("Technology");
@@ -152,6 +177,21 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, init
             </div>
 
             <div className="modal-footer">
+              <button
+                className={`btn btn-secondary ${emailSent === "sent" ? "email-send-btn sent" : emailSent === "failed" ? "email-send-btn failed" : ""}`}
+                onClick={handleSendCredentialsEmail}
+                disabled={emailSending || emailSent === "sent"}
+              >
+                {emailSending ? (
+                  <><Loader2 size={16} className="spin" /> Sending...</>
+                ) : emailSent === "sent" ? (
+                  <><CheckCircle size={16} /> Email Sent</>
+                ) : emailSent === "failed" ? (
+                  <><Mail size={16} /> Retry Email</>
+                ) : (
+                  <><Mail size={16} /> Send Credentials via Email</>
+                )}
+              </button>
               <button className="btn btn-secondary" onClick={handleCopyCredentials}>
                 {copied ? (
                   <>

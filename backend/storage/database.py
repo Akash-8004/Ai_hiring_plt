@@ -28,6 +28,8 @@ _audit_log = _db["audit_log"]
 _usage_log = _db["usage_log"]
 _plans_config = _db["plans_config"]
 _leads = _db["leads"]
+_email_logs = _db["email_logs"]
+_jd_requests = _db["jd_change_requests"]
 
 # ── Indexes ─────────────────────────────────────────────────────────────────
 try:
@@ -55,6 +57,9 @@ try:
     _leads.create_index("work_email")
     _leads.create_index("status")
     _leads.create_index([("created_at", DESCENDING)])
+    _email_logs.create_index([("to_email", 1), ("sent_at", DESCENDING)])
+    _email_logs.create_index([("status", 1)])
+    _jd_requests.create_index([("company_id", 1), ("job_id", 1)], unique=True)
 except Exception:
     pass
 
@@ -122,6 +127,25 @@ def update_user_permissions(user_id: str, permissions: list[str]) -> None:
     )
 
 
+def update_user_profile(user_id: str, updates: dict) -> dict | None:
+    """Update user name/email/role. Returns the updated doc (sensitive fields stripped)."""
+    try:
+        result = _users.find_one_and_update(
+            {"_id": ObjectId(user_id)},
+            {"$set": updates},
+            return_document=ReturnDocument.AFTER,
+        )
+        if result:
+            result["_id"] = str(result["_id"])
+            result.pop("password_hash", None)
+            result.pop("active_session_token", None)
+            if result.get("company_id"):
+                result["company_id"] = str(result["company_id"])
+        return result
+    except Exception:
+        return None
+
+
 def list_users_by_company(company_id: str) -> list[dict]:
     try:
         return list(_users.find({"company_id": ObjectId(company_id)}))
@@ -165,7 +189,11 @@ def get_company_by_slug(slug: str) -> dict | None:
 
 
 def list_companies() -> list[dict]:
-    return list(_companies.find().sort("created_at", DESCENDING))
+    return list(_companies.find({"status": {"$ne": "archived"}}).sort("created_at", DESCENDING))
+
+
+def list_archived_companies() -> list[dict]:
+    return list(_companies.find({"status": "archived"}).sort("deleted_at", DESCENDING))
 
 
 def update_company(company_id: str, updates: dict) -> None:
@@ -217,26 +245,44 @@ def delete_company_admin_chain(company_id: str) -> dict:
     return {"users_removed": removed}
 
 
-def delete_company(company_id: str) -> dict:
-    """Permanently delete a company and all of its tenant-scoped data.
+def delete_company(company_id: str, deleted_by: str = "") -> dict:
+    """Soft-delete (archive) a company. Data is preserved for inspection/restore.
 
-    Order matters: child collections are removed before the company row so that
-    if a later step fails the company still exists for a retry. The audit log is
-    intentionally retained for compliance and accountability.
+    The company is flagged as archived and its users are suspended so they
+    cannot log in. No documents are actually removed.
     """
     cid = ObjectId(company_id)
-    result = {
-        "users": 0,
-        "candidates": 0,
-        "jobs": 0,
-        "usage_logs": 0,
-    }
-    result["users"] = _users.delete_many({"company_id": cid}).deleted_count
-    result["candidates"] = _candidates.delete_many({"company_id": cid}).deleted_count
-    result["jobs"] = _jobs.delete_many({"company_id": cid}).deleted_count
-    result["usage_logs"] = _usage_log.delete_many({"company_id": cid}).deleted_count
-    result["company_removed"] = _companies.delete_one({"_id": cid}).deleted_count
-    return result
+    now = datetime.now(timezone.utc)
+    _companies.update_one(
+        {"_id": cid},
+        {"$set": {
+            "status": "archived",
+            "deleted_at": now,
+            "deleted_by": deleted_by,
+        }},
+    )
+    users_suspended = _users.update_many(
+        {"company_id": cid, "status": {"$ne": "suspended"}},
+        {"$set": {"status": "suspended"}},
+    ).modified_count
+    return {"archived": True, "users_suspended": users_suspended}
+
+
+def restore_company(company_id: str, restored_by: str = "") -> dict:
+    """Restore an archived company back to active. Reactivates its users."""
+    cid = ObjectId(company_id)
+    _companies.update_one(
+        {"_id": cid},
+        {
+            "$set": {"status": "active"},
+            "$unset": {"deleted_at": "", "deleted_by": ""},
+        },
+    )
+    users_reactivated = _users.update_many(
+        {"company_id": cid, "status": "suspended"},
+        {"$set": {"status": "active"}},
+    ).modified_count
+    return {"restored": True, "users_reactivated": users_reactivated}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -276,7 +322,7 @@ def get_plans_config() -> dict:
         result[plan_id] = {
             "price": stored_prices.get(plan_id, PLAN_PRICES.get(plan_id)),
             "max_users": overrides.get("max_users", defaults["max_users"]),
-            "max_jobs": overrides.get("max_jobs", defaults["max_jobs"]),
+            "max_candidates": overrides.get("max_candidates", defaults["max_candidates"]),
             "max_credits": overrides.get("max_credits", defaults["max_credits"]),
         }
     return result
@@ -286,7 +332,7 @@ def get_plan_limits(plan: str) -> dict:
     cfg = get_plans_config().get(plan) or get_plans_config()["starter"]
     return {
         "max_users": cfg["max_users"],
-        "max_jobs": cfg["max_jobs"],
+        "max_candidates": cfg["max_candidates"],
         "max_credits": cfg["max_credits"],
     }
 
@@ -299,7 +345,7 @@ def set_plans_config(plan_updates: dict) -> dict:
         if fields.get("price") is not None or "price" in fields:
             prices[plan_id] = fields.get("price")
         tier_limits = limits.setdefault(plan_id, {})
-        for key in ("max_users", "max_jobs", "max_credits"):
+        for key in ("max_users", "max_candidates", "max_credits"):
             if fields.get(key) is not None:
                 tier_limits[key] = fields[key]
     _plans_config.update_one(
@@ -633,10 +679,12 @@ def query_audit_log(filters: dict, page: int = 1, limit: int = 50) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def get_platform_stats() -> dict:
+    active_filter = {"status": {"$ne": "archived"}}
     return {
-        "total_companies": _companies.count_documents({}),
+        "total_companies": _companies.count_documents(active_filter),
         "active_companies": _companies.count_documents({"status": "active"}),
         "suspended_companies": _companies.count_documents({"status": "suspended"}),
+        "archived_companies": _companies.count_documents({"status": "archived"}),
         "total_users": _users.count_documents({}),
         "total_candidates": _candidates.count_documents({}),
         "total_interviews": _candidates.count_documents({
@@ -774,6 +822,10 @@ def count_jobs(company_id: str) -> int:
     return _jobs.count_documents({"company_id": str(company_id), "job_id": {"$exists": True}})
 
 
+def count_company_candidates(company_id: str) -> int:
+    return _candidates.count_documents({"company_id": str(company_id)})
+
+
 def set_active_drive(company_id: str, job_id: str | None) -> None:
     _companies.update_one(
         {"_id": ObjectId(company_id)},
@@ -845,7 +897,6 @@ def get_drive_overview(company_id: str) -> dict:
     cid = str(company_id)
     company = get_company_by_id(cid) or {}
     active_job_id = get_active_drive(cid)
-    max_jobs = company.get("max_jobs", 3)
     drives_out = []
     for drive in list_jobs(cid):
         jid = drive["job_id"]
@@ -866,10 +917,98 @@ def get_drive_overview(company_id: str) -> dict:
         })
     return {
         "drives": drives_out,
-        "max_jobs": max_jobs,
         "jobs_used": count_jobs(cid),
         "active_job_id": active_job_id,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# JD CHANGE REQUESTS — sub-user proposals awaiting company-admin approval
+# ═══════════════════════════════════════════════════════════════════════════
+
+def get_jd_request(company_id: str, job_id: str) -> dict | None:
+    """Return the pending (or latest) JD change request for a job drive."""
+    return _jd_requests.find_one({"company_id": str(company_id), "job_id": job_id})
+
+
+def get_jd_request_by_id(request_id: str) -> dict | None:
+    try:
+        return _jd_requests.find_one({"_id": ObjectId(request_id)})
+    except Exception:
+        return None
+
+
+def list_jd_requests(company_id: str | None = None, status: str | None = None) -> list[dict]:
+    query: dict = {}
+    if company_id:
+        query["company_id"] = str(company_id)
+    if status:
+        query["status"] = status
+    return list(_jd_requests.find(query).sort("requested_at", 1))
+
+
+def upsert_jd_request(
+    company_id: str,
+    job_id: str,
+    proposed: dict,
+    target_status: str,
+    requested_by: dict,
+) -> dict:
+    """Create or replace the pending JD change request for a job drive.
+
+    There is at most one request per ``(company_id, job_id)``. Submitting a new
+    proposal while one is still pending replaces it.
+    """
+    now = datetime.now(timezone.utc)
+    doc = {
+        "company_id": str(company_id),
+        "job_id": job_id,
+        "target_status": target_status,   # "create" | "edit"
+        "proposed": proposed,             # proposed JobDescription fields
+        "status": "pending",
+        "requested_by_id": requested_by.get("id"),
+        "requested_by_email": requested_by.get("email"),
+        "requested_by_name": requested_by.get("name"),
+        "requested_at": now,
+        "reviewed_by": None,
+        "reviewed_at": None,
+        "review_note": None,
+    }
+    _jd_requests.update_one(
+        {"company_id": str(company_id), "job_id": job_id},
+        {"$set": doc},
+        upsert=True,
+    )
+    return get_jd_request(company_id, job_id)
+
+
+def resolve_jd_request(
+    company_id: str,
+    job_id: str,
+    decision: str,          # "approved" | "rejected"
+    reviewed_by: dict,
+    note: str | None = None,
+) -> dict | None:
+    """Mark a pending request as approved or rejected without deleting it."""
+    now = datetime.now(timezone.utc)
+    _jd_requests.update_one(
+        {"company_id": str(company_id), "job_id": job_id, "status": "pending"},
+        {"$set": {
+            "status": decision,
+            "reviewed_by_id": reviewed_by.get("id"),
+            "reviewed_by_email": reviewed_by.get("email"),
+            "reviewed_at": now,
+            "review_note": note,
+        }},
+    )
+    return get_jd_request(company_id, job_id)
+
+
+def has_pending_jd_request(company_id: str, job_id: str) -> bool:
+    doc = _jd_requests.find_one(
+        {"company_id": str(company_id), "job_id": job_id, "status": "pending"}
+    )
+    return doc is not None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -975,6 +1114,16 @@ def set_candidate_hr_invitation(
     _candidates.update_one(
         _candidate_filter(email, company_id, job_id),
         {"$set": {"hr_invitation": invitation, "pipelineStage": "hr_invited"}},
+    )
+
+
+def set_candidate_email_sent(
+    email: str, interview_type: str, company_id: str | None = None, job_id: str | None = None,
+) -> None:
+    """Mark email as sent for a candidate's interview type (hr or technical)."""
+    _candidates.update_one(
+        _candidate_filter(email, company_id, job_id),
+        {"$set": {f"email_sent.{interview_type}": True}},
     )
 
 
@@ -1125,3 +1274,54 @@ def count_leads(status: str | None = None) -> int:
     if status:
         query["status"] = status
     return _leads.count_documents(query)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# EMAIL LOGS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def insert_email_log(doc: dict) -> str:
+    """Insert an email log document and return the string ID."""
+    result = _email_logs.insert_one(doc)
+    return str(result.inserted_id)
+
+
+def get_email_logs(filters: dict, page: int = 1, limit: int = 25) -> dict:
+    """Query email logs with pagination.
+
+    Supported filter keys: ``email_type``, ``status``, ``to_email``.
+    """
+    query: dict = {}
+    if filters.get("email_type"):
+        query["email_type"] = filters["email_type"]
+    if filters.get("status"):
+        query["status"] = filters["status"]
+    if filters.get("to_email"):
+        query["to_email"] = filters["to_email"]
+
+    total = _email_logs.count_documents(query)
+    skip = (page - 1) * limit
+    entries = list(
+        _email_logs.find(query)
+        .sort("sent_at", DESCENDING)
+        .skip(skip)
+        .limit(limit)
+    )
+
+    def _clean(val):
+        if isinstance(val, ObjectId):
+            return str(val)
+        if isinstance(val, datetime):
+            return val.isoformat()
+        if isinstance(val, dict):
+            return {k: _clean(v) for k, v in val.items()}
+        if isinstance(val, list):
+            return [_clean(item) for item in val]
+        return val
+
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "entries": [_clean(e) for e in entries],
+    }

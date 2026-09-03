@@ -11,6 +11,7 @@ import { Sidebar } from "./components/layout/Sidebar";
 import { Topbar } from "./components/layout/Topbar";
 import { Dashboard, matchesCandidateFilter } from "./components/dashboard/Dashboard";
 import { JobEditor } from "./components/job/JobEditor";
+import { JdApprovalPanel } from "./components/job/JdApprovalPanel";
 import { ResumeIntake } from "./components/resumes/ResumeIntake";
 import { Pipeline } from "./components/pipeline/Pipeline";
 import { CandidatePanel } from "./components/candidate/CandidatePanel";
@@ -75,6 +76,11 @@ function App() {
       });
       setWorkspace(data);
       setActiveJobId(data.job_id || null);
+      if (data.jd_request) {
+        alert(
+          `Your ${jobEditorMode === "create" ? "new drive request" : "changes"} have been submitted for company admin approval.`
+        );
+      }
       setJobEditorMode("edit");
       setActiveView("dashboard");
     } catch (err) {
@@ -96,7 +102,9 @@ function App() {
 
   async function deleteDrive(drive) {
     const count = drive.candidate_count ?? 0;
-    const msg = `Delete drive "${drive.title}"? This permanently removes the drive and all ${count} of its candidates.`;
+    const msg = isCompanyAdmin
+      ? `Delete drive "${drive.title}"? This permanently removes the drive and all ${count} of its candidates.`
+      : `Submit deletion request for drive "${drive.title}"? As a team member, this will be submitted to a Company Admin for approval before the drive is deleted.`;
     if (!window.confirm(msg)) return;
     setSaving(true);
     setError("");
@@ -104,6 +112,9 @@ function App() {
       const data = await apiFetchJson(`/api/job/${encodeURIComponent(drive.job_id)}`, { method: "DELETE" });
       setWorkspace(data);
       setActiveJobId(data.job_id || null);
+      if (data.jd_request) {
+        alert(`Your request to delete drive "${drive.title}" has been submitted for company admin approval.`);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -200,9 +211,19 @@ function App() {
   const canViewPipeline = hasPermission("view_pipeline");
   const canConductInterviews = hasPermission("conduct_interviews");
   const canManageJobs = isCompanyAdmin || hasPermission("manage_jobs");
-  const canDeleteDrive = isCompanyAdmin || hasPermission("manage_drive_delete");
-  const maxJobs = workspace?.company?.max_jobs ?? 3;
+  const canDeleteDrive = isCompanyAdmin || hasPermission("manage_drive_delete") || hasPermission("manage_jobs");
   const drives = workspace?.drives || [];
+  const jdRequests = workspace?.jd_requests || [];
+  const pendingRequest = jdRequests.find(
+    (r) =>
+      r.status === "pending" &&
+      (r.job_id === activeJobId ||
+        (!isCompanyAdmin && jobEditorMode === "create" && r.target_status === "create"))
+  );
+
+  async function refreshAfterJdAction() {
+    await refresh(activeJobId);
+  }
 
   const viewAllowed = (view) => {
     if (view === "resumes") return canManageResumes;
@@ -223,7 +244,6 @@ function App() {
     onCreateDrive: openCreateDrive,
     canCreateDrive: canManageJobs,
     canDeleteDrive,
-    maxJobs,
   };
 
   return (
@@ -262,15 +282,22 @@ function App() {
         )}
 
         {effectiveView === "job" && (
-          <JobEditor
-            job={jobEditorMode === "create" ? null : workspace?.job}
-            jobId={jobEditorMode === "create" ? null : activeJobId}
-            mode={jobEditorMode}
-            driveCount={drives.length}
-            maxJobs={maxJobs}
-            onSave={saveJob}
-            saving={saving}
-          />
+          <>
+            <JdApprovalPanel
+              requests={jdRequests}
+              onResolved={refreshAfterJdAction}
+              isCompanyAdmin={isCompanyAdmin}
+            />
+            <JobEditor
+              job={jobEditorMode === "create" ? null : workspace?.job}
+              jobId={jobEditorMode === "create" ? null : activeJobId}
+              mode={jobEditorMode}
+              onSave={saveJob}
+              saving={saving}
+              pendingRequest={pendingRequest}
+              isCompanyAdmin={isCompanyAdmin}
+            />
+          </>
         )}
 
         {effectiveView === "resumes" && (
@@ -281,6 +308,7 @@ function App() {
           <Pipeline
             candidates={workspace?.candidates || []}
             onInvite={inviteCandidate}
+            onRefresh={refresh}
             canInvite={canConductInterviews}
             busy={saving}
           />

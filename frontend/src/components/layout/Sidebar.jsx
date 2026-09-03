@@ -27,7 +27,7 @@ export function Sidebar({
   const planName = (company?.plan || "starter").toUpperCase();
   const seatsUsed = company?.current_users;
   const maxUsers = company?.max_users;
-  const maxJobs = company?.max_jobs;
+  const maxCandidates = company?.max_candidates;
   const credits = company?.credits;
   const creditsUsed = credits?.used;
   const creditsAllowance = credits?.allowance;
@@ -99,12 +99,12 @@ export function Sidebar({
                   <strong>{seatsUsed != null ? `${seatsUsed} / ${maxUsers ?? "—"}` : `${maxUsers ?? "—"}`}</strong>
                 </li>
                 <li>
-                  <span>Job postings</span>
-                  <strong>Up to {maxJobs ?? "—"}</strong>
+                  <span>Candidate limit</span>
+                  <strong>Up to {maxCandidates ? maxCandidates.toLocaleString() : "—"}</strong>
                 </li>
                 <li>
                   <span>Job drives</span>
-                  <strong>{drives.length} / {maxJobs ?? "—"}</strong>
+                  <strong>{drives.length} (unlimited)</strong>
                 </li>
                 {activeDrive ? (
                   <li>

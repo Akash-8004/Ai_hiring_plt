@@ -1,8 +1,11 @@
-import React from "react";
-import { Loader2, Send, UsersRound } from "lucide-react";
+import React, { useState } from "react";
+import { Loader2, Mail, Send, UsersRound } from "lucide-react";
 import { PipelineCandidateRow } from "./PipelineCandidateRow";
+import { apiFetchJson } from "../../utils/api";
 
-export function Pipeline({ candidates, onInvite, canInvite = false, busy }) {
+export function Pipeline({ candidates, onInvite, onRefresh, canInvite = false, busy }) {
+  const [emailSending, setEmailSending] = useState({});
+
   const uploaded = candidates.length;
   const shortlisted = candidates.filter((c) => c.Status === "Shortlisted");
   const hrInvited = candidates.filter((c) => c.hr_invitation?.link);
@@ -14,6 +17,23 @@ export function Pipeline({ candidates, onInvite, canInvite = false, busy }) {
   const hiredList = candidates.filter((c) => c.technical_interview?.decision === "PASS" && c.hr_interview?.decision === "PASS");
   const hrInvitedEmails = new Set(hrInvited.map((c) => c.Email));
   const techInvitedEmails = new Set(techInvited.map((c) => c.Email));
+
+  async function handleSendEmail(email, type) {
+    const key = `${email}:${type}`;
+    setEmailSending((prev) => ({ ...prev, [key]: true }));
+    try {
+      await apiFetchJson(
+        `/api/candidates/${encodeURIComponent(email)}/invite?interview_type=${type}&send_email=true`,
+        { method: "POST" }
+      );
+      alert("Email sent successfully!");
+      if (onRefresh) await onRefresh();
+    } catch (err) {
+      alert(`Email failed: ${err.message}`);
+    } finally {
+      setEmailSending((prev) => ({ ...prev, [key]: false }));
+    }
+  }
 
   const pipelineStages = [
     ["Uploaded", uploaded],
@@ -84,8 +104,10 @@ export function Pipeline({ candidates, onInvite, canInvite = false, busy }) {
                     key={`${candidate.Email}-${candidate.Name}`}
                     candidate={candidate}
                     onInvite={onInvite}
+                    onSendEmail={handleSendEmail}
                     canInvite={canInvite}
                     busy={busy}
+                    emailSending={emailSending}
                   />
                 ))}
               </tbody>

@@ -10,10 +10,8 @@ export function DriveSelector({
   onCreateDrive,
   canCreateDrive,
   canDeleteDrive,
-  maxJobs = 3,
   compact = false,
 }) {
-  const atLimit = drives.length >= maxJobs;
   const activeDrive = drives.find((d) => d.job_id === activeJobId);
 
   if (!drives.length) {
@@ -38,14 +36,33 @@ export function DriveSelector({
           {activeJobId && <span className="badge badge-subtle ml-2">Active</span>}
         </div>
         <span className="drive-usage-label text-xs text-muted">
-          {drives.length} / {maxJobs} drives
+          {drives.length} drive{drives.length === 1 ? "" : "s"}
         </span>
       </div>
       <ul className="drive-list">
         {drives.map((drive) => (
           <li key={drive.job_id} className={drive.job_id === activeJobId ? "active" : ""}>
             <div className="drive-list-info">
-              <span className="drive-title">{drive.title}</span>
+              <div className="flex-row gap-2 align-center">
+                <span className="drive-title">{drive.title}</span>
+                {drive.has_pending_request && (
+                  <span
+                    className={`badge ${
+                      drive.pending_request_type === "delete"
+                        ? "status-badge status-suspended"
+                        : "status-badge shortlisted"
+                    }`}
+                    style={{ fontSize: "0.68rem", padding: "1px 6px" }}
+                    title={
+                      drive.pending_request_type === "delete"
+                        ? "Deletion request pending company admin approval"
+                        : "Changes pending company admin approval"
+                    }
+                  >
+                    {drive.pending_request_type === "delete" ? "Deletion Pending" : "Pending Review"}
+                  </span>
+                )}
+              </div>
               <span className="text-xs text-muted">
                 {drive.department} · {drive.candidate_count ?? 0} candidates
               </span>
@@ -80,8 +97,7 @@ export function DriveSelector({
           type="button"
           className="btn btn-primary btn-sm mt-2"
           onClick={onCreateDrive}
-          disabled={atLimit}
-          title={atLimit ? "Drive limit reached" : "Create a new job drive"}
+          title="Create a new job drive"
         >
           <Plus size={14} /> New Drive
         </button>

@@ -101,8 +101,8 @@ export function UsageView() {
                 </strong>
               </div>
               <div>
-                <span className="usage-stat-label">Active Jobs</span>
-                <strong className="usage-stat-value">Up to {billing?.max_jobs ?? "—"}</strong>
+                <span className="usage-stat-label">Candidate Limit</span>
+                <strong className="usage-stat-value">Up to {billing?.max_candidates ? billing.max_candidates.toLocaleString() : "—"}</strong>
               </div>
             </div>
           )}

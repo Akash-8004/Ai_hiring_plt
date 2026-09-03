@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Loader2, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { Field } from "../common/Field";
+import { useAuth } from "../../hooks/useAuth";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
@@ -28,17 +29,45 @@ function blankJobForm() {
   };
 }
 
-export function JobEditor({ job, jobId, mode = "edit", driveCount = 0, maxJobs = 3, onSave, saving }) {
-  const source = mode === "create" || !job ? blankJobForm() : job;
+export function JobEditor({ job, jobId, mode = "edit", onSave, saving, pendingRequest, isCompanyAdmin: isCompanyAdminProp }) {
+  const { role } = useAuth();
+  const isCompanyAdmin = isCompanyAdminProp ?? (role === "company_admin" || role === "super_admin");
+
+  const pendingProposed = pendingRequest?.proposed;
+  // If admin: always edit actual job (or blank if create); do not silently overwrite with employee's proposal
+  // If employee: load their pending proposal if one exists, otherwise blank if create, otherwise job
+  const source = isCompanyAdmin
+    ? (mode === "create" || !job ? blankJobForm() : job)
+    : (pendingProposed || (mode === "create" || !job ? blankJobForm() : job));
   const [form, setForm] = useState({
     ...source,
     required_skills: Array.isArray(source.required_skills) ? source.required_skills.join(", ") : source.required_skills || "",
     nice_to_have_skills: Array.isArray(source.nice_to_have_skills) ? source.nice_to_have_skills.join(", ") : source.nice_to_have_skills || "",
   });
-  const [questions, setQuestions] = useState(mode === "create" ? [] : (job?.custom_questions || []));
+  const [questions, setQuestions] = useState(
+    isCompanyAdmin
+      ? (mode === "create" ? [] : (job?.custom_questions || []))
+      : (mode === "create" ? [] : (pendingProposed?.custom_questions || job?.custom_questions || []))
+  );
   const [manualText, setManualText] = useState("");
   const [processing, setProcessing] = useState(false);
   const [processingError, setProcessingError] = useState("");
+
+  function handleLoadProposal() {
+    if (!pendingProposed) return;
+    setForm({
+      ...pendingProposed,
+      required_skills: Array.isArray(pendingProposed.required_skills)
+        ? pendingProposed.required_skills.join(", ")
+        : pendingProposed.required_skills || "",
+      nice_to_have_skills: Array.isArray(pendingProposed.nice_to_have_skills)
+        ? pendingProposed.nice_to_have_skills.join(", ")
+        : pendingProposed.nice_to_have_skills || "",
+    });
+    if (pendingProposed.custom_questions) {
+      setQuestions(pendingProposed.custom_questions);
+    }
+  }
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -123,9 +152,60 @@ export function JobEditor({ job, jobId, mode = "edit", driveCount = 0, maxJobs =
   return (
     <form className="form-grid" onSubmit={submit}>
       <section className="form-panel wide">
-        <h2>{mode === "create" ? "Create Job Drive" : "Edit Job Drive"}</h2>
+        <h2>
+          {isCompanyAdmin
+            ? mode === "create"
+              ? "Create Job Drive"
+              : "Edit Job Drive"
+            : mode === "create"
+            ? "Request New Job Drive"
+            : "Propose Changes to Job Drive"}
+        </h2>
+
+        {/* Admin notice if employee submitted a proposal for this drive */}
+        {isCompanyAdmin && pendingRequest ? (
+          <div className="notice warning mb-3">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
+              <div>
+                <strong>Team Member Proposal Pending:</strong>{" "}
+                <span>
+                  {pendingRequest.requested_by_name || pendingRequest.requested_by_email || "A team member"} submitted
+                  a {pendingRequest.target_status === "create" ? "new drive request" : "change proposal"} for this drive.
+                  You can verify and approve it in the Approvals panel above, or load their changes into this form below.
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-xs btn-secondary"
+                onClick={handleLoadProposal}
+                title="Load the submitted values into this form"
+              >
+                Load Proposal into Form
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Employee notices */}
+        {!isCompanyAdmin && pendingRequest ? (
+          <div className="notice info mb-3">
+            <strong>Pending Admin Approval:</strong>{" "}
+            <span>
+              Your changes have been submitted and are awaiting approval from a company admin.
+              Submitting again will update your pending proposal.
+            </span>
+          </div>
+        ) : !isCompanyAdmin ? (
+          <div className="notice info mb-3">
+            <strong>Requires Admin Approval:</strong>{" "}
+            <span>
+              As a team member, your {mode === "create" ? "new drive request" : "changes"} will be submitted to a Company Admin for verification and approval before taking effect.
+            </span>
+          </div>
+        ) : null}
+
         <p className="text-sm text-muted mb-3">
-          {driveCount} of {maxJobs} drives used
+          Job drives are unlimited
         </p>
         <div className="field-grid">
           <Field label="Job title" value={form.title} onChange={(value) => update("title", value)} />
@@ -164,7 +244,17 @@ export function JobEditor({ job, jobId, mode = "edit", driveCount = 0, maxJobs =
         </label>
         <button className="primary-button submit-button" disabled={saving}>
           {saving ? <Loader2 className="spin" size={17} /> : <Sparkles size={17} />}
-          {mode === "create" ? "Create Drive" : "Save JD"}
+          {isCompanyAdmin
+            ? saving
+              ? "Saving…"
+              : mode === "create"
+              ? "Create Job Drive"
+              : "Save Changes"
+            : saving
+            ? "Submitting…"
+            : mode === "create"
+            ? "Submit New Drive for Approval"
+            : "Submit Changes for Approval"}
         </button>
       </section>
 

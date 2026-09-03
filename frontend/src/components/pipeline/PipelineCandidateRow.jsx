@@ -1,12 +1,18 @@
-import React from "react";
-import { CheckCircle2, Send, XCircle } from "lucide-react";
+import React, { useState } from "react";
+import { CheckCircle2, Loader2, Mail, Send, XCircle } from "lucide-react";
 import { CopyButton } from "../common/CopyButton";
 
-export function PipelineCandidateRow({ candidate, onInvite, canInvite = false, busy }) {
+export function PipelineCandidateRow({ candidate, onInvite, onSendEmail, canInvite = false, busy, emailSending }) {
   const hrInvitation = candidate.hr_invitation;
   const hrInterview = candidate.hr_interview || {};
   const invitation = candidate.invitation;
   const techInterview = candidate.technical_interview || {};
+  const emailSent = candidate.email_sent || {};
+
+  const isHrEmailSending = emailSending?.[candidate.Email + ":hr"];
+  const isTechEmailSending = emailSending?.[candidate.Email + ":technical"];
+  const hrEmailSent = !!emailSent.hr;
+  const techEmailSent = !!emailSent.technical;
 
   // --- HR Invitation Cell ---
   let hrInviteCell;
@@ -17,11 +23,28 @@ export function PipelineCandidateRow({ candidate, onInvite, canInvite = false, b
         Completed
       </span>
     );
+  } else if (hrInvitation?.link && hrEmailSent) {
+    hrInviteCell = (
+      <span className="status-badge shortlisted">
+        <CheckCircle2 size={15} />
+        Email Sent
+      </span>
+    );
   } else if (hrInvitation?.link) {
     hrInviteCell = (
       <div className="invite-link-row">
         <span className="invite-link">{hrInvitation.link.replace(/^https?:\/\//, "")}</span>
         <CopyButton text={hrInvitation.link} />
+        {canInvite && (
+          <button
+            className="icon-button"
+            onClick={() => onSendEmail(candidate.Email, "hr")}
+            disabled={isHrEmailSending}
+            title="Send invite via email"
+          >
+            {isHrEmailSending ? <Loader2 size={16} className="spin" /> : <Mail size={16} />}
+          </button>
+        )}
       </div>
     );
   } else if (candidate.Status === "Shortlisted") {
@@ -69,11 +92,28 @@ export function PipelineCandidateRow({ candidate, onInvite, canInvite = false, b
         <span>Score {techInterview.score}%</span>
       </div>
     );
+  } else if (invitation?.link && techEmailSent) {
+    techCell = (
+      <span className="status-badge shortlisted">
+        <CheckCircle2 size={15} />
+        Email Sent
+      </span>
+    );
   } else if (invitation?.link) {
     techCell = (
       <div className="invite-link-row">
         <span className="invite-link">{invitation.link.replace(/^https?:\/\//, "")}</span>
         <CopyButton text={invitation.link} />
+        {canInvite && (
+          <button
+            className="icon-button"
+            onClick={() => onSendEmail(candidate.Email, "technical")}
+            disabled={isTechEmailSending}
+            title="Send invite via email"
+          >
+            {isTechEmailSending ? <Loader2 size={16} className="spin" /> : <Mail size={16} />}
+          </button>
+        )}
       </div>
     );
   } else if (hrInterview.decision === "PASS") {

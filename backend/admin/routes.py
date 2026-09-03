@@ -9,6 +9,7 @@ Company Admin endpoints (/api/company/*):
 """
 
 from datetime import datetime, timezone
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
@@ -17,9 +18,11 @@ from backend.auth.models import (
     CreateCompanyRequest,
     CreateSubUserRequest,
     ResetUserPasswordRequest,
+    SendCredentialsRequest,
     UpdateCompanyRequest,
     UpdatePlanPricingRequest,
     UpdateSubUserPermissionsRequest,
+    UpdateUserProfileRequest,
     VALID_PERMISSIONS,
 )
 from backend.auth.security import (
@@ -31,6 +34,8 @@ from backend.auth.security import (
     require_super_admin,
 )
 from backend.storage import database
+from backend.services import email_service
+from backend.services.email_templates import credential_delivery_email
 
 admin_router = APIRouter(prefix="/api/admin", tags=["admin"])
 company_router = APIRouter(prefix="/api/company", tags=["company"])
@@ -78,7 +83,7 @@ def create_company(body: CreateCompanyRequest, user: dict = Depends(require_supe
         "plan": body.plan,
         "status": "active",
         "max_users": limits["max_users"],
-        "max_jobs": limits["max_jobs"],
+        "max_candidates": limits["max_candidates"],
         "created_at": datetime.now(timezone.utc),
         "created_by": str(user.get("_id", user.get("id", ""))),
         "settings": {
@@ -126,6 +131,16 @@ def create_company(body: CreateCompanyRequest, user: dict = Depends(require_supe
     }
 
 
+@admin_router.get("/companies/archived")
+def list_archived_companies(user: dict = Depends(require_super_admin)):
+    """List archived (soft-deleted) companies."""
+    companies = database.list_archived_companies()
+    for c in companies:
+        c["_id"] = str(c["_id"])
+        c["current_users"] = database.count_company_users(str(c["_id"]))
+    return {"companies": companies}
+
+
 @admin_router.get("/companies/{company_id}")
 def get_company(company_id: str, user: dict = Depends(require_super_admin)):
     """View company details."""
@@ -157,12 +172,12 @@ def update_company(
         changes["plan"] = {"from": company["plan"], "to": body.plan}
         updates["plan"] = body.plan
         updates["max_users"] = limits["max_users"]
-        updates["max_jobs"] = limits["max_jobs"]
+        updates["max_candidates"] = limits["max_candidates"]
         plan_changed = body.plan != company.get("plan")
     if body.max_users is not None:
         updates["max_users"] = body.max_users
-    if body.max_jobs is not None:
-        updates["max_jobs"] = body.max_jobs
+    if body.max_candidates is not None:
+        updates["max_candidates"] = body.max_candidates
     if body.industry is not None:
         updates["industry"] = body.industry
     if body.contact_phone is not None:
@@ -278,28 +293,58 @@ def delete_company(
     user: dict = Depends(require_super_admin),
     request: Request = None,
 ):
-    """Permanently delete a company and all of its tenant-scoped data."""
+    """Archive a company (soft delete). Data is preserved for inspection/restore."""
     company = database.get_company_by_id(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
-    result = database.delete_company(company_id)
+    if company.get("status") == "archived":
+        return {"ok": True, "message": "Company is already archived."}
+    actor_id = str(user.get("_id", user.get("id", "")))
+    result = database.delete_company(company_id, deleted_by=actor_id)
     log_activity(
-        action="company.deleted",
+        action="company.archived",
         category="user_mgmt",
         actor=user,
         target_type="company",
         target_id=company_id,
         target_label=company["name"],
         metadata={
-            "deleted_users": result.get("users", 0),
-            "deleted_candidates": result.get("candidates", 0),
-            "deleted_jobs": result.get("jobs", 0),
-            "deleted_usage_logs": result.get("usage_logs", 0),
+            "users_suspended": result.get("users_suspended", 0),
         },
         severity="critical",
         request=request,
     )
-    return {"ok": True, "cascaded": result}
+    return {"ok": True, "archived": True, "detail": result}
+
+
+@admin_router.post("/companies/{company_id}/restore")
+def restore_company(
+    company_id: str,
+    user: dict = Depends(require_super_admin),
+    request: Request = None,
+):
+    """Restore an archived company back to active."""
+    company = database.get_company_by_id(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if company.get("status") != "archived":
+        raise HTTPException(status_code=400, detail="Company is not archived")
+    actor_id = str(user.get("_id", user.get("id", "")))
+    result = database.restore_company(company_id, restored_by=actor_id)
+    log_activity(
+        action="company.restored",
+        category="user_mgmt",
+        actor=user,
+        target_type="company",
+        target_id=company_id,
+        target_label=company["name"],
+        metadata={
+            "users_reactivated": result.get("users_reactivated", 0),
+        },
+        severity="critical",
+        request=request,
+    )
+    return {"ok": True, "restored": True, "detail": result}
 
 
 @admin_router.get("/companies/{company_id}/activity")
@@ -445,6 +490,56 @@ def reset_user_password(
     return {"ok": True, "new_password": body.new_password}
 
 
+@admin_router.put("/users/{user_id}")
+def update_user_profile(
+    user_id: str,
+    body: UpdateUserProfileRequest,
+    user: dict = Depends(require_super_admin),
+    request: Request = None,
+):
+    """Super Admin edits a team member's name, email, or role."""
+    target = database.get_user_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target["role"] == "super_admin":
+        raise HTTPException(status_code=400, detail="Cannot edit a Super Admin")
+
+    updates = {}
+    changes = {}
+    if body.full_name is not None:
+        changes["full_name"] = {"from": target.get("full_name", ""), "to": body.full_name}
+        updates["full_name"] = body.full_name
+    if body.email is not None and body.email != target["email"]:
+        existing = database.get_user_by_email(body.email)
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already in use")
+        changes["email"] = {"from": target["email"], "to": body.email}
+        updates["email"] = body.email
+    if body.role is not None and body.role != target["role"]:
+        changes["role"] = {"from": target["role"], "to": body.role}
+        updates["role"] = body.role
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No changes provided")
+
+    updated = database.update_user_profile(user_id, updates)
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to update user")
+
+    log_activity(
+        action="user.profile_updated",
+        category="user_mgmt",
+        actor=user,
+        target_type="user",
+        target_id=user_id,
+        target_label=f"{updated.get('full_name', '')} ({updated.get('email', '')})",
+        metadata={"changes": changes},
+        request=request,
+    )
+
+    return {"ok": True, "user": updated}
+
+
 @admin_router.get("/companies/{company_id}/usage")
 def admin_company_usage(
     company_id: str,
@@ -566,6 +661,46 @@ def get_audit_log(
     if search:
         filters["search"] = search
     return database.query_audit_log(filters, page, limit)
+
+
+@admin_router.post("/companies/{company_id}/send-credentials")
+def send_company_credentials(
+    company_id: str,
+    body: SendCredentialsRequest,
+    user: dict = Depends(require_super_admin),
+    request: Request = None,
+):
+    """Send the company admin credentials via email."""
+    company = database.get_company_by_id(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    target_user = database.get_user_by_email(body.admin_email)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Admin user not found")
+
+    portal_url = f"{os.getenv('APP_URL', 'http://localhost:5173')}/login"
+    subject, html_body, plain_body = credential_delivery_email(
+        company["name"], body.admin_email, body.admin_password, portal_url,
+    )
+
+    result = email_service.send_email(body.admin_email, subject, html_body, plain_body)
+    email_ok = result.get("ok", False)
+    email_error = result.get("error")
+
+    email_service.log_email_send(
+        to_email=body.admin_email,
+        subject=subject,
+        email_type="credential_delivery",
+        status="sent" if email_ok else "failed",
+        error_message=email_error,
+        metadata={"company_id": company_id, "company_name": company["name"]},
+        sent_by=user.get("email", "system"),
+    )
+
+    if not email_ok:
+        return {"ok": False, "message": f"Email failed: {email_error}"}
+    return {"ok": True, "message": "Credentials sent successfully"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -786,7 +921,7 @@ def company_billing(user: dict = Depends(require_permission("view_usage"))):
         "plan_price": prices.get(plan),
         "credits": database.get_company_credits(company_id),
         "max_users": company.get("max_users", limits["max_users"]),
-        "max_jobs": company.get("max_jobs", limits["max_jobs"]),
+        "max_candidates": company.get("max_candidates", limits["max_candidates"]),
         "current_users": database.count_company_users(company_id),
     }
 

@@ -84,7 +84,7 @@ def public_plans() -> dict:
             "id": plan_id,
             "label": plan_id.capitalize(),
             "max_users": cfg["max_users"],
-            "max_jobs": cfg["max_jobs"],
+            "max_candidates": cfg["max_candidates"],
             "max_credits": cfg["max_credits"],
             "price": cfg["price"],
         })

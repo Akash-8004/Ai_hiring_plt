@@ -47,6 +47,13 @@ class ResetUserPasswordRequest(BaseModel):
         return v
 
 
+class UpdateUserProfileRequest(BaseModel):
+    """Super Admin edits a team member's name, email, or role."""
+    full_name: str | None = None
+    email: str | None = None
+    role: str | None = Field(default=None, pattern="^(company_admin|sub_user)$")
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 
@@ -76,7 +83,7 @@ class CreateSubUserRequest(BaseModel):
 class UpdateCompanyRequest(BaseModel):
     plan: str | None = Field(default=None, pattern="^(starter|growth|enterprise)$")
     max_users: int | None = Field(default=None, ge=1, le=500)
-    max_jobs: int | None = Field(default=None, ge=1, le=1000)
+    max_candidates: int | None = Field(default=None, ge=1, le=100000)
     industry: str | None = None
     contact_phone: str | None = None
     price_adjustments: dict[str, float | None] | None = None
@@ -92,10 +99,16 @@ class AdjustCreditsRequest(BaseModel):
     note: str = ""
 
 
+class SendCredentialsRequest(BaseModel):
+    """Payload for sending company admin credentials via email."""
+    admin_email: str
+    admin_password: str
+
+
 class PlanTierUpdate(BaseModel):
     price: float | None = None
     max_users: int | None = Field(default=None, ge=1, le=500)
-    max_jobs: int | None = Field(default=None, ge=1, le=1000)
+    max_candidates: int | None = Field(default=None, ge=1, le=100000)
 
 
 class UpdatePlanPricingRequest(BaseModel):
@@ -132,7 +145,7 @@ class CompanyProfile(BaseModel):
     plan: str
     status: str
     max_users: int
-    max_jobs: int
+    max_candidates: int
     current_users: int = 0
     created_at: str
     credits: dict | None = None
@@ -148,9 +161,9 @@ VALID_PERMISSIONS = frozenset({
 # ── Plan Limits ─────────────────────────────────────────────────────────────
 
 PLAN_LIMITS = {
-    "starter": {"max_users": 5, "max_jobs": 3, "max_credits": 500},
-    "growth": {"max_users": 15, "max_jobs": 10, "max_credits": 2000},
-    "enterprise": {"max_users": 50, "max_jobs": 50, "max_credits": 10000},
+    "starter": {"max_users": 5, "max_candidates": 100, "max_credits": 500},
+    "growth": {"max_users": 15, "max_candidates": 500, "max_credits": 2000},
+    "enterprise": {"max_users": 50, "max_candidates": 5000, "max_credits": 10000},
 }
 
 PLAN_PRICES = {"starter": None, "growth": None, "enterprise": None}

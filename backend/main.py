@@ -29,6 +29,8 @@ from backend.services.resume_parser import parse_resume_text, parse_uploaded_res
 from backend.services.Technical.technical_evaluator import TechnicalInterviewEvaluator
 from backend.services import r2_storage
 from backend.storage import database
+from backend.services import email_service
+from backend.services.email_templates import interview_invite_email
 from backend.auth.security import (
     get_current_user,
     hash_password,
@@ -142,6 +144,10 @@ class ManualResumePayload(BaseModel):
     text: str
 
 
+class RejectJdPayload(BaseModel):
+    note: str = ""
+
+
 class ProcessQuestionsPayload(BaseModel):
     text: str = ""
 
@@ -182,12 +188,35 @@ def update_job(
     job = JobDescription(**payload.model_dump(exclude={"job_id"}))
     effective_job_id = payload.job_id
 
+    is_admin = user.get("role") in ("super_admin", "company_admin")
+
+    if not is_admin:
+        # Non-admin (sub-user) changes are submitted as a request for approval.
+        if effective_job_id and not database.get_job_by_id(company_id, effective_job_id):
+            raise HTTPException(status_code=404, detail="Drive not found")
+        if not effective_job_id:
+            effective_job_id = secrets.token_urlsafe(12)
+        database.upsert_jd_request(
+            company_id=company_id,
+            job_id=effective_job_id,
+            proposed=asdict(job),
+            target_status=("create" if not payload.job_id else "edit"),
+            requested_by={"id": str(user.get("_id") or ""), "email": user.get("email"), "name": user.get("full_name")},
+        )
+        log_activity(
+            action=f"job.change_requested_{'create' if not payload.job_id else 'edit'}",
+            category="job",
+            actor=user,
+            target_type="job",
+            target_id=effective_job_id,
+            target_label=job.title,
+            request=request,
+        )
+        payload_data = _workspace_payload(company_id, user, job_id=effective_job_id)
+        payload_data["jd_request"] = _clean_mongo(database.get_jd_request(company_id, effective_job_id))
+        return payload_data
+
     if not effective_job_id:
-        count = database.count_jobs(company_id)
-        company = database.get_company_by_id(company_id)
-        max_jobs = (company or {}).get("max_jobs", 3)
-        if count >= max_jobs:
-            raise HTTPException(status_code=403, detail="Job drive limit reached")
         stored = database.upsert_job(job, company_id)
         effective_job_id = stored["job_id"]
         database.set_active_drive(company_id, effective_job_id)
@@ -197,6 +226,14 @@ def update_job(
             raise HTTPException(status_code=404, detail="Drive not found")
         database.upsert_job(job, company_id, job_id=effective_job_id)
         action = "job.updated"
+        if database.has_pending_jd_request(company_id, effective_job_id):
+            database.resolve_jd_request(
+                company_id,
+                effective_job_id,
+                "approved",
+                reviewed_by={"id": str(user.get("_id") or ""), "email": user.get("email")},
+                note="Drive updated directly by company admin",
+            )
 
     database.clear_candidate_scores(company_id, job_id=effective_job_id)
     log_activity(
@@ -209,6 +246,130 @@ def update_job(
         request=request,
     )
     return _workspace_payload(company_id, user, job_id=effective_job_id)
+
+
+@app.get("/api/job/requests")
+def list_job_requests(
+    user: dict = Depends(require_authenticated),
+) -> dict[str, Any]:
+    """List JD change requests for the caller's company.
+
+    Company admins see all requests; sub-users see only the requests they
+    submitted (so they can track their own pending proposals).
+    """
+    company_id = str(user["company_id"]) if user.get("company_id") else None
+    if not company_id:
+        raise HTTPException(status_code=400, detail="No company associated")
+    return {"requests": _jd_requests_for_user(company_id, user)}
+
+
+@app.post("/api/job/requests/{request_id}/approve")
+def approve_job_request(
+    request_id: str,
+    user: dict = Depends(require_company_admin),
+    request: Request = None,
+) -> dict[str, Any]:
+    company_id = str(user["company_id"]) if user.get("company_id") else None
+    if not company_id:
+        raise HTTPException(status_code=400, detail="No company associated")
+    req_doc = database.get_jd_request_by_id(request_id)
+    if not req_doc or req_doc.get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req_doc.get("status") != "pending":
+        raise HTTPException(status_code=400, detail="Request already resolved")
+
+    job_id = req_doc["job_id"]
+    target_status = req_doc.get("target_status")
+
+    if target_status == "delete":
+        title = req_doc.get("proposed", {}).get("title", job_id)
+        database.delete_job(company_id, job_id)
+        if database.get_active_drive(company_id) == job_id:
+            remaining = database.list_jobs(company_id)
+            effective_job_id = remaining[0]["job_id"] if remaining else None
+            database.set_active_drive(company_id, effective_job_id)
+        else:
+            effective_job_id = database.get_active_drive(company_id)
+        database.resolve_jd_request(
+            company_id, job_id, "approved",
+            reviewed_by={"id": str(user.get("_id") or ""), "email": user.get("email")},
+        )
+        log_activity(
+            action="job.deleted",
+            category="job",
+            actor=user,
+            target_type="job",
+            target_id=job_id,
+            target_label=title,
+            severity="critical",
+            request=request,
+        )
+        return _workspace_payload(company_id, user, job_id=effective_job_id)
+
+    proposed = dict(req_doc.get("proposed") or {})
+    job = JobDescription(**proposed)
+
+    if target_status == "create":
+        stored = database.upsert_job(job, company_id, job_id=job_id)
+        effective_job_id = stored["job_id"]
+        database.set_active_drive(company_id, effective_job_id)
+    else:
+        if not database.get_job_by_id(company_id, job_id):
+            raise HTTPException(status_code=404, detail="Drive not found")
+        effective_job_id = job_id
+        database.upsert_job(job, company_id, job_id=job_id)
+
+    database.clear_candidate_scores(company_id, job_id=effective_job_id)
+    database.resolve_jd_request(
+        company_id, job_id, "approved",
+        reviewed_by={"id": str(user.get("_id") or ""), "email": user.get("email")},
+    )
+    log_activity(
+        action="job.change_approved",
+        category="job",
+        actor=user,
+        target_type="job",
+        target_id=effective_job_id,
+        target_label=job.title,
+        request=request,
+    )
+    return _workspace_payload(company_id, user, job_id=effective_job_id)
+
+
+@app.post("/api/job/requests/{request_id}/reject")
+def reject_job_request(
+    request_id: str,
+    payload: RejectJdPayload | None = None,
+    user: dict = Depends(require_company_admin),
+    request: Request = None,
+) -> dict[str, Any]:
+    company_id = str(user["company_id"]) if user.get("company_id") else None
+    if not company_id:
+        raise HTTPException(status_code=400, detail="No company associated")
+    req_doc = database.get_jd_request_by_id(request_id)
+    if not req_doc or req_doc.get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req_doc.get("status") != "pending":
+        raise HTTPException(status_code=400, detail="Request already resolved")
+
+    job_id = req_doc["job_id"]
+    note = payload.note.strip() if payload and payload.note else None
+    database.resolve_jd_request(
+        company_id, job_id, "rejected",
+        reviewed_by={"id": str(user.get("_id") or ""), "email": user.get("email")},
+        note=note,
+    )
+    log_activity(
+        action="job.change_rejected",
+        category="job",
+        actor=user,
+        target_type="job",
+        target_id=job_id,
+        target_label=req_doc.get("proposed", {}).get("title", ""),
+        metadata={"note": note} if note else {},
+        request=request,
+    )
+    return _workspace_payload(company_id, user)
 
 
 @app.delete("/api/job/{job_id}")
@@ -229,7 +390,44 @@ def delete_job_drive(
     if not job_doc:
         raise HTTPException(status_code=404, detail="Drive not found")
     title = job_doc.get("title", job_id)
+
+    is_admin = user.get("role") in ("super_admin", "company_admin")
+
+    if not is_admin:
+        candidates_count = len(database.load_candidates(cid, job_id=job_id))
+        database.upsert_jd_request(
+            company_id=cid,
+            job_id=job_id,
+            proposed={
+                "title": title,
+                "department": job_doc.get("department", ""),
+                "candidate_count": candidates_count,
+            },
+            target_status="delete",
+            requested_by={"id": str(user.get("_id") or ""), "email": user.get("email"), "name": user.get("full_name")},
+        )
+        log_activity(
+            action="job.change_requested_delete",
+            category="job",
+            actor=user,
+            target_type="job",
+            target_id=job_id,
+            target_label=title,
+            request=request,
+        )
+        payload_data = _workspace_payload(cid, user, job_id=job_id)
+        payload_data["jd_request"] = _clean_mongo(database.get_jd_request(cid, job_id))
+        return payload_data
+
     database.delete_job(cid, job_id)
+    if database.has_pending_jd_request(cid, job_id):
+        database.resolve_jd_request(
+            cid,
+            job_id,
+            "approved",
+            reviewed_by={"id": str(user.get("_id") or ""), "email": user.get("email")},
+            note="Drive deleted directly by company admin",
+        )
     log_activity(
         action="job.deleted",
         category="job",
@@ -291,6 +489,7 @@ def add_manual_resume(
     if not job_id:
         raise HTTPException(status_code=400, detail="Create a job drive first")
     resume = parse_resume_text(payload.file_name, payload.text)
+    _enforce_candidate_limit(company_id)
     database.upsert_candidate(resume, company_id=company_id, job_id=job_id)
     log_activity(
         action="candidate.uploaded",
@@ -316,6 +515,7 @@ async def upload_resumes(
     file_names = []
     for file in files:
         resume = _parse_uploaded_bytes(file.filename or "resume.txt", await file.read())
+        _enforce_candidate_limit(company_id)
         database.upsert_candidate(resume, company_id=company_id, job_id=job_id)
         file_names.append(file.filename)
     log_activity(
@@ -339,6 +539,7 @@ def load_sample_resumes(
     database.clear_candidates(company_id, job_id=job_id)
     for index, text in enumerate(SAMPLE_RESUMES):
         resume = parse_resume_text(f"sample_resume_{index + 1}.txt", text)
+        _enforce_candidate_limit(company_id)
         database.upsert_candidate(resume, company_id=company_id, job_id=job_id)
     return _workspace_payload(company_id, user, job_id=job_id)
 
@@ -369,6 +570,7 @@ def clear_resumes(
 def invite_candidate(
     email: str,
     interview_type: str = "technical",
+    send_email: bool = False,
     user: dict = Depends(require_permission("conduct_interviews")),
     request: Request = None,
 ) -> dict[str, Any]:
@@ -400,7 +602,44 @@ def invite_candidate(
         metadata={"interview_type": interview_type},
         request=request,
     )
-    return _workspace_payload(company_id, user, job_id=_active_drive_id(company_id))
+
+    # ── Send invitation email if requested ────────────────────────────────
+    email_sent = False
+    email_error = None
+    already_sent = (candidate_doc.get("email_sent") or {}).get(interview_type, False)
+    if send_email:
+        if already_sent:
+            email_sent = True
+        else:
+            try:
+                candidate_name = candidate_doc.get("full_name", email)
+                app_url = os.getenv("APP_URL", "http://localhost:5173")
+                email_link = f"{app_url}/?interview={token}&type={interview_type}"
+                subject, html_body, plain_body = interview_invite_email(
+                    candidate_name, interview_type, email_link,
+                )
+                result = email_service.send_email(email, subject, html_body, plain_body)
+                email_sent = result.get("ok", False)
+                email_error = result.get("error")
+                email_service.log_email_send(
+                    to_email=email,
+                    subject=subject,
+                    email_type="interview_invite",
+                    status="sent" if email_sent else "failed",
+                    error_message=email_error,
+                    metadata={"interview_type": interview_type, "token": token},
+                    sent_by=user.get("email", "system"),
+                )
+                if email_sent:
+                    database.set_candidate_email_sent(email, interview_type, company_id, job_id)
+            except Exception as exc:
+                email_error = str(exc)
+
+    payload = _workspace_payload(company_id, user, job_id=_active_drive_id(company_id))
+    payload["email_sent"] = email_sent
+    if email_error:
+        payload["email_error"] = email_error
+    return payload
 
 @app.get("/api/interview/session/{token}")
 def interview_session(token: str) -> dict[str, Any]:
@@ -918,6 +1157,7 @@ def _workspace_payload(
         row["technical_interview"] = doc.get("technical_interview")
         row["hr_interview"] = doc.get("hr_interview")
         row["interview_transcript"] = doc.get("interview_transcript") or []
+        row["email_sent"] = doc.get("email_sent") or {}
         row["recording"] = (doc.get("technical_interview") or {}).get("recording") or (doc.get("hr_interview") or {}).get("recording")
         rows.append(row)
 
@@ -930,12 +1170,16 @@ def _workspace_payload(
     if company_id:
         for d in database.list_jobs(company_id):
             jid = d["job_id"]
+            pending_req = database.get_jd_request(company_id, jid)
+            is_pending = bool(pending_req and pending_req.get("status") == "pending")
             drives.append({
                 "job_id": jid,
                 "title": d.get("title", ""),
                 "department": d.get("department", ""),
                 "status": d.get("status", "active"),
                 "candidate_count": len(database.load_candidates(company_id, job_id=jid)),
+                "has_pending_request": is_pending,
+                "pending_request_type": pending_req.get("target_status") if is_pending else None,
             })
 
     company_info = {"name": "AI Hiring Platform", "plan": "starter", "role": "user"}
@@ -948,7 +1192,7 @@ def _workspace_payload(
                 company_info["name"] = company.get("name", "Unknown")
                 company_info["plan"] = company.get("plan", "starter")
                 company_info["max_users"] = company.get("max_users")
-                company_info["max_jobs"] = company.get("max_jobs")
+                company_info["max_candidates"] = company.get("max_candidates") or database.get_plan_limits(company.get("plan", "starter"))["max_candidates"]
                 company_info["current_users"] = database.count_company_users(cid)
                 company_info["credits"] = database.get_company_credits(cid)
                 prices = database.get_plan_prices()
@@ -960,6 +1204,7 @@ def _workspace_payload(
         "job_id": effective_job_id,
         "drives": drives,
         "metrics": metrics,
+        "jd_requests": _jd_requests_for_user(company_id, user),
         "screening": {
             "provider": ranking_service.last_provider_used,
             "model": ranking_service.model,
@@ -969,7 +1214,52 @@ def _workspace_payload(
     }
 
 
+def _jd_requests_for_user(company_id: str | None, user: dict | None) -> list[dict]:
+    """Return JD change requests relevant to the current user.
+
+    Admins see all pending+resolved requests for the company so they can act.
+    Sub-users see only the requests they submitted.
+    """
+    if not company_id or not user:
+        return []
+    if user.get("role") in ("super_admin", "company_admin"):
+        requests = database.list_jd_requests(company_id)
+    else:
+        requests = [
+            r for r in database.list_jd_requests(company_id)
+            if r.get("requested_by_email") == user.get("email")
+        ]
+    cleaned = []
+    for r in requests:
+        c = _clean_mongo(r)
+        if c.get("target_status") in ("edit", "delete") and c.get("job_id"):
+            current_doc = database.get_job_doc(company_id, c["job_id"])
+            if current_doc:
+                c["current"] = _clean_mongo({k: v for k, v in current_doc.items() if k != "_id"})
+        cleaned.append(c)
+    return sorted(
+        cleaned,
+        key=lambda r: r.get("requested_at") or "",
+        reverse=True,
+    )
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+def _clean_mongo(val):
+    """Recursively convert Mongo ObjectId / datetime to JSON-serializable values."""
+    if isinstance(val, dict):
+        return {k: _clean_mongo(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_clean_mongo(item) for item in val]
+    if isinstance(val, datetime):
+        return val.isoformat()
+    if isinstance(val, (str, int, float, bool)) or val is None:
+        return val
+    if type(val).__name__ == "ObjectId":
+        return str(val)
+    return val
+
 
 def _sanitized_questions(custom_questions: list[dict]) -> list[dict]:
     """Candidate-safe view of the custom question bank (no expected points)."""
@@ -1117,3 +1407,21 @@ def _parse_uploaded_bytes(file_name: str, contents: bytes) -> ParsedResume:
     if suffix in {".txt", ".docx", ".pdf"}:
         return parse_uploaded_resume(stream)
     return parse_resume_text(file_name, contents.decode("utf-8", errors="ignore"))
+
+
+def _enforce_candidate_limit(company_id: str | None) -> None:
+    """Enforce company-wide total candidate limit based on company plan."""
+    if not company_id:
+        return
+    count = database.count_company_candidates(company_id)
+    company = database.get_company_by_id(company_id) or {}
+    plan = company.get("plan", "starter")
+    max_candidates = company.get("max_candidates")
+    if max_candidates is None:
+        max_candidates = database.get_plan_limits(plan).get("max_candidates", 100)
+    if count >= max_candidates:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Candidate limit reached ({count}/{max_candidates}). Upgrade your plan to add more candidates.",
+        )
+

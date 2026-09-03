@@ -22,6 +22,11 @@ import {
   Eye,
   EyeOff,
   Inbox,
+  Mail,
+  Loader2,
+  Pencil,
+  Archive,
+  RotateCcw,
 } from "lucide-react";
 import { apiFetchJson } from "../../utils/api";
 import { useAuth } from "../../hooks/useAuth";
@@ -30,9 +35,9 @@ import { ActivityLogViewer } from "./ActivityLogViewer";
 import { LeadsPanel } from "./LeadsPanel";
 
 const PLAN_TIERS = [
-  { id: "starter", label: "Starter", max_users: 5, max_jobs: 3, max_credits: 500, price: null },
-  { id: "growth", label: "Growth", max_users: 15, max_jobs: 10, max_credits: 2000, price: null },
-  { id: "enterprise", label: "Enterprise", max_users: 50, max_jobs: 50, max_credits: 10000, price: null },
+  { id: "starter", label: "Starter", max_users: 5, max_candidates: 100, max_credits: 500, price: null },
+  { id: "growth", label: "Growth", max_users: 15, max_candidates: 500, max_credits: 2000, price: null },
+  { id: "enterprise", label: "Enterprise", max_users: 50, max_candidates: 5000, max_credits: 10000, price: null },
 ];
 
 export function SuperAdminDashboard() {
@@ -48,6 +53,8 @@ export function SuperAdminDashboard() {
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [selectedCompanyForLogs, setSelectedCompanyForLogs] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [credentialEmailSending, setCredentialEmailSending] = useState(false);
+  const [credentialEmailSent, setCredentialEmailSent] = useState(null);
   const [companyFilter, setCompanyFilter] = useState("");
   const [expandedCompanyId, setExpandedCompanyId] = useState(null);
   const [expandedUsers, setExpandedUsers] = useState([]);
@@ -62,9 +69,9 @@ export function SuperAdminDashboard() {
   const resetPasswordInputRef = useRef(null);
   const [planPricing, setPlanPricing] = useState({ starter: null, growth: null, enterprise: null });
   const [draftPlans, setDraftPlans] = useState({
-    starter: { price: "", max_users: "5", max_jobs: "3" },
-    growth: { price: "", max_users: "15", max_jobs: "10" },
-    enterprise: { price: "", max_users: "50", max_jobs: "50" },
+    starter: { price: "", max_users: "5", max_candidates: "100" },
+    growth: { price: "", max_users: "15", max_candidates: "500" },
+    enterprise: { price: "", max_users: "50", max_candidates: "5000" },
   });
   const [pricingSaving, setPricingSaving] = useState(false);
   const [companyUsage, setCompanyUsage] = useState(null);
@@ -72,6 +79,12 @@ export function SuperAdminDashboard() {
   const [creditAdjustAmount, setCreditAdjustAmount] = useState("");
   const [creditAdjustLoading, setCreditAdjustLoading] = useState(false);
   const [companyDrives, setCompanyDrives] = useState(null);
+  const [editingUserId, setEditingUserId] = useState(null);
+  const [editUserForm, setEditUserForm] = useState({ full_name: "", email: "", role: "sub_user" });
+  const [editUserLoading, setEditUserLoading] = useState(false);
+  const [companyViewMode, setCompanyViewMode] = useState("active");
+  const [archivedCompanies, setArchivedCompanies] = useState([]);
+  const [loadingArchived, setLoadingArchived] = useState(false);
 
   useEffect(() => {
     if (resetPasswordUserId && !resetPasswordSuccess && resetPasswordInputRef.current) {
@@ -100,17 +113,17 @@ export function SuperAdminDashboard() {
         starter: {
           price: pricingData.starter?.price != null ? String(pricingData.starter.price) : "",
           max_users: String(pricingData.starter?.max_users ?? 5),
-          max_jobs: String(pricingData.starter?.max_jobs ?? 3),
+          max_candidates: String(pricingData.starter?.max_candidates ?? 100),
         },
         growth: {
           price: pricingData.growth?.price != null ? String(pricingData.growth.price) : "",
           max_users: String(pricingData.growth?.max_users ?? 15),
-          max_jobs: String(pricingData.growth?.max_jobs ?? 10),
+          max_candidates: String(pricingData.growth?.max_candidates ?? 500),
         },
         enterprise: {
           price: pricingData.enterprise?.price != null ? String(pricingData.enterprise.price) : "",
           max_users: String(pricingData.enterprise?.max_users ?? 50),
-          max_jobs: String(pricingData.enterprise?.max_jobs ?? 50),
+          max_candidates: String(pricingData.enterprise?.max_candidates ?? 5000),
         },
       });
     } catch (err) {
@@ -166,12 +179,12 @@ export function SuperAdminDashboard() {
 
   const handleDeleteCompany = async (comp) => {
     const confirmed = window.prompt(
-      `Permanently delete company "${comp.name}"?\n\nThis removes the company and ALL of its data (users, candidates, jobs, usage records). This cannot be undone.\n\nType the exact company name to confirm:`,
+      `Archive company "${comp.name}"?\n\nThis will archive the company, suspend its team members, and hide it from active lists. Data is preserved and can be restored later.\n\nType the exact company name to confirm:`,
       ""
     );
     if (confirmed === null) return;
     if (confirmed.trim() !== comp.name) {
-      alert("Company name did not match. Deletion cancelled.");
+      alert("Company name did not match. Archival cancelled.");
       return;
     }
     try {
@@ -179,11 +192,66 @@ export function SuperAdminDashboard() {
       if (expandedCompanyId === comp._id) {
         setExpandedCompanyId(null);
         setCompanyUsage(null);
-      setCompanyDrives(null);
+        setCompanyDrives(null);
       }
       await refreshAllData();
+      if (companyViewMode === "archived") {
+        await loadArchivedCompanies();
+      }
     } catch (err) {
-      alert(err.message || "Failed to delete company.");
+      alert(err.message || "Failed to archive company.");
+    }
+  };
+
+  const loadArchivedCompanies = async () => {
+    setLoadingArchived(true);
+    try {
+      const res = await apiFetchJson("/api/admin/companies/archived");
+      setArchivedCompanies(res.companies || []);
+    } catch (err) {
+      alert(err.message || "Failed to load archived companies.");
+    } finally {
+      setLoadingArchived(false);
+    }
+  };
+
+  const handleRestoreCompany = async (comp) => {
+    if (!window.confirm(`Restore company "${comp.name}" back to active status? Its team members will also be reactivated.`)) return;
+    try {
+      await apiFetchJson(`/api/admin/companies/${comp._id}/restore`, { method: "POST" });
+      await refreshAllData();
+      await loadArchivedCompanies();
+    } catch (err) {
+      alert(err.message || "Failed to restore company.");
+    }
+  };
+
+  const handleSaveEditUser = async (userId) => {
+    if (!editUserForm.full_name?.trim()) {
+      alert("Full name is required.");
+      return;
+    }
+    if (!editUserForm.email?.trim()) {
+      alert("Email is required.");
+      return;
+    }
+    setEditUserLoading(true);
+    try {
+      const res = await apiFetchJson(`/api/admin/users/${userId}`, {
+        method: "PUT",
+        body: JSON.stringify(editUserForm),
+      });
+      if (res.ok && res.user) {
+        setExpandedUsers((prev) =>
+          prev.map((u) => (u._id === userId ? { ...u, ...res.user } : u))
+        );
+      }
+      setEditingUserId(null);
+      await refreshAllData();
+    } catch (err) {
+      alert(err.message || "Failed to update user profile.");
+    } finally {
+      setEditUserLoading(false);
     }
   };
 
@@ -201,6 +269,7 @@ export function SuperAdminDashboard() {
       setNewPasswordInput("");
       setResetPasswordSuccess(null);
       setShowNewPassword(false);
+      setEditingUserId(null);
       return;
     }
     setExpandedCompanyId(comp._id);
@@ -288,7 +357,7 @@ export function SuperAdminDashboard() {
         plans[tier.id] = {
           price: draft.price === "" ? null : Number(draft.price),
           max_users: Number(draft.max_users),
-          max_jobs: Number(draft.max_jobs),
+          max_candidates: Number(draft.max_candidates),
         };
       }
       const updated = await apiFetchJson("/api/admin/plans/pricing", {
@@ -300,17 +369,17 @@ export function SuperAdminDashboard() {
         starter: {
           price: updated.starter?.price != null ? String(updated.starter.price) : "",
           max_users: String(updated.starter?.max_users ?? 5),
-          max_jobs: String(updated.starter?.max_jobs ?? 3),
+          max_candidates: String(updated.starter?.max_candidates ?? 100),
         },
         growth: {
           price: updated.growth?.price != null ? String(updated.growth.price) : "",
           max_users: String(updated.growth?.max_users ?? 15),
-          max_jobs: String(updated.growth?.max_jobs ?? 10),
+          max_candidates: String(updated.growth?.max_candidates ?? 500),
         },
         enterprise: {
           price: updated.enterprise?.price != null ? String(updated.enterprise.price) : "",
           max_users: String(updated.enterprise?.max_users ?? 50),
-          max_jobs: String(updated.enterprise?.max_jobs ?? 50),
+          max_candidates: String(updated.enterprise?.max_candidates ?? 5000),
         },
       });
     } catch (err) {
@@ -392,7 +461,8 @@ export function SuperAdminDashboard() {
     setOnboardingLead(null);
   };
 
-  const filteredCompanies = companies.filter((c) => {
+  const displayedCompanyList = companyViewMode === "archived" ? archivedCompanies : companies;
+  const filteredCompanies = displayedCompanyList.filter((c) => {
     const q = searchQuery.toLowerCase();
     return c.name.toLowerCase().includes(q) || c.contact_email.toLowerCase().includes(q) || (c.industry || "").toLowerCase().includes(q);
   });
@@ -498,7 +568,7 @@ export function SuperAdminDashboard() {
                 <div className="kpi-info">
                   <span className="kpi-label">Active Companies</span>
                   <h3 className="kpi-value">{stats?.active_companies || 0}</h3>
-                  <span className="kpi-subtext">Total onboarded: {stats?.total_companies || 0}</span>
+                  <span className="kpi-subtext">Total: {stats?.total_companies || 0} · Archived: {stats?.archived_companies || 0}</span>
                 </div>
               </div>
 
@@ -623,7 +693,24 @@ export function SuperAdminDashboard() {
             <div className="card-header-flex">
               <div className="card-title-group">
                 <Building2 size={20} className="text-primary" />
-                <h2 className="card-title">All Client Companies</h2>
+                <h2 className="card-title">Client Companies</h2>
+                <div className="flex-row gap-2 ml-4">
+                  <button
+                    className={`btn btn-xs ${companyViewMode === "active" ? "btn-primary" : "btn-secondary"}`}
+                    onClick={() => setCompanyViewMode("active")}
+                  >
+                    Active ({companies.length})
+                  </button>
+                  <button
+                    className={`btn btn-xs ${companyViewMode === "archived" ? "btn-primary" : "btn-secondary"}`}
+                    onClick={() => {
+                      setCompanyViewMode("archived");
+                      loadArchivedCompanies();
+                    }}
+                  >
+                    <Archive size={12} /> Archived ({stats?.archived_companies ?? archivedCompanies.length})
+                  </button>
+                </div>
               </div>
               <div className="flex-row gap-3">
                 <div className="search-wrap">
@@ -661,7 +748,11 @@ export function SuperAdminDashboard() {
                   {filteredCompanies.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="text-center py-8 text-muted">
-                        No companies found. Click "Onboard Company" to create one.
+                        {loadingArchived
+                          ? "Loading archived companies…"
+                          : companyViewMode === "archived"
+                          ? "No archived companies found."
+                          : 'No companies found. Click "Onboard Company" to create one.'}
                       </td>
                     </tr>
                   ) : (
@@ -714,33 +805,45 @@ export function SuperAdminDashboard() {
                           </span>
                         </td>
                         <td>
-                          <span className={`badge status-badge ${comp.status === "active" ? "status-active" : "status-suspended"}`}>
-                            {comp.status === "active" ? "Active" : "Suspended"}
+                          <span className={`badge status-badge ${comp.status === "active" ? "status-active" : comp.status === "archived" ? "status-suspended" : "status-suspended"}`}>
+                            {comp.status === "active" ? "Active" : comp.status === "archived" ? "Archived" : "Suspended"}
                           </span>
                         </td>
                         <td>
-                          <div className="flex-row gap-2">
-                            <button
-                              className="btn btn-secondary btn-xs"
-                              onClick={() => handleViewCompanyLogs(comp._id)}
-                              title="Inspect company activity logs"
-                            >
-                              Audit Logs
-                            </button>
-                            <button
-                              className={`btn btn-xs ${comp.status === "active" ? "btn-danger" : "btn-primary"}`}
-                              onClick={() => handleToggleCompanyStatus(comp._id, comp.status)}
-                            >
-                              {comp.status === "active" ? "Suspend" : "Activate"}
-                            </button>
-                            <button
-                              className="btn btn-xs btn-danger-ghost"
-                              title="Permanently delete this company and all its data"
-                              onClick={() => handleDeleteCompany(comp)}
-                            >
-                              Delete
-                            </button>
-                          </div>
+                          {companyViewMode === "archived" ? (
+                            <div className="flex-row gap-2">
+                              <button
+                                className="btn btn-primary btn-xs"
+                                title="Restore this company and its team members"
+                                onClick={() => handleRestoreCompany(comp)}
+                              >
+                                <RotateCcw size={12} /> Restore
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex-row gap-2">
+                              <button
+                                className="btn btn-secondary btn-xs"
+                                onClick={() => handleViewCompanyLogs(comp._id)}
+                                title="Inspect company activity logs"
+                              >
+                                Audit Logs
+                              </button>
+                              <button
+                                className={`btn btn-xs ${comp.status === "active" ? "btn-danger" : "btn-primary"}`}
+                                onClick={() => handleToggleCompanyStatus(comp._id, comp.status)}
+                              >
+                                {comp.status === "active" ? "Suspend" : "Activate"}
+                              </button>
+                              <button
+                                className="btn btn-xs btn-danger-ghost"
+                                title="Archive this company (soft delete)"
+                                onClick={() => handleDeleteCompany(comp)}
+                              >
+                                Archive
+                              </button>
+                            </div>
+                          )}
                         </td>
                       </tr>
 
@@ -767,7 +870,7 @@ export function SuperAdminDashboard() {
                                       />
                                       <span className="plan-option-name">{tier.label}</span>
                                       <span className="plan-option-limits">
-                                        {(planPricing[tier.id]?.max_users ?? tier.max_users)} users · {(planPricing[tier.id]?.max_jobs ?? tier.max_jobs)} jobs · {tier.max_credits.toLocaleString()} credits/mo
+                                        {(planPricing[tier.id]?.max_users ?? tier.max_users)} users · {(planPricing[tier.id]?.max_candidates ?? tier.max_candidates)} candidates · {tier.max_credits.toLocaleString()} credits/mo
                                       </span>
                                       {planPricing[tier.id]?.price != null && (
                                         <span className="plan-option-limits">${planPricing[tier.id].price}/mo</span>
@@ -897,7 +1000,7 @@ export function SuperAdminDashboard() {
                                 {companyDrives ? (
                                   <>
                                     <p className="text-sm text-muted mb-3">
-                                      {companyDrives.jobs_used ?? 0} of {companyDrives.max_jobs ?? 0} drives used
+                                      {companyDrives.jobs_used ?? 0} job drive{companyDrives.jobs_used === 1 ? "" : "s"} (unrestricted)
                                     </p>
                                     {(companyDrives.drives || []).length === 0 ? (
                                       <p className="text-muted text-sm">No drives yet.</p>
@@ -957,7 +1060,7 @@ export function SuperAdminDashboard() {
                                         <th>Role</th>
                                         <th>Status</th>
                                         <th>Last Login</th>
-                                        <th>Update Credential</th>
+                                        <th>Actions</th>
                                       </tr>
                                     </thead>
                                     <tbody>
@@ -982,18 +1085,40 @@ export function SuperAdminDashboard() {
                                             {su.role === "super_admin" ? (
                                               <span className="text-xs text-muted">—</span>
                                             ) : (
-                                              <button
-                                                className={`btn btn-xs ${resetPasswordUserId === su._id ? "btn-primary" : "btn-secondary"}`}
-                                                onClick={() => {
-                                                  setResetPasswordUserId(resetPasswordUserId === su._id ? null : su._id);
-                                                  setNewPasswordInput("");
-                                                  setShowNewPassword(false);
-                                                  setResetPasswordSuccess(null);
-                                                }}
-                                                title="Reset password for this user"
-                                              >
-                                                <Key size={12} /> {resetPasswordUserId === su._id ? "Cancel" : "Reset"}
-                                              </button>
+                                              <div className="flex-row gap-1 align-center">
+                                                <button
+                                                  className={`btn btn-xs ${editingUserId === su._id ? "btn-primary" : "btn-secondary"}`}
+                                                  onClick={() => {
+                                                    if (editingUserId === su._id) {
+                                                      setEditingUserId(null);
+                                                    } else {
+                                                      setEditingUserId(su._id);
+                                                      setEditUserForm({
+                                                        full_name: su.full_name || "",
+                                                        email: su.email || "",
+                                                        role: su.role || "sub_user",
+                                                      });
+                                                      setResetPasswordUserId(null);
+                                                    }
+                                                  }}
+                                                  title="Edit team member details"
+                                                >
+                                                  <Pencil size={12} /> {editingUserId === su._id ? "Cancel" : "Edit"}
+                                                </button>
+                                                <button
+                                                  className={`btn btn-xs ${resetPasswordUserId === su._id ? "btn-primary" : "btn-secondary"}`}
+                                                  onClick={() => {
+                                                    setResetPasswordUserId(resetPasswordUserId === su._id ? null : su._id);
+                                                    setNewPasswordInput("");
+                                                    setShowNewPassword(false);
+                                                    setResetPasswordSuccess(null);
+                                                    setEditingUserId(null);
+                                                  }}
+                                                  title="Reset password for this user"
+                                                >
+                                                  <Key size={12} /> {resetPasswordUserId === su._id ? "Cancel" : "Reset"}
+                                                </button>
+                                              </div>
                                             )}
                                           </td>
                                         </tr>
@@ -1027,6 +1152,45 @@ export function SuperAdminDashboard() {
                                               onClick={() => handleCopyPassword(resetPasswordSuccess.new_password)}
                                             >
                                               <Copy size={13} /> Copy
+                                            </button>
+                                            <button
+                                              className={`btn btn-secondary btn-xs ${credentialEmailSent === "sent" ? "email-send-btn sent" : credentialEmailSent === "failed" ? "email-send-btn failed" : ""}`}
+                                              disabled={credentialEmailSending || credentialEmailSent === "sent"}
+                                              onClick={async () => {
+                                                const targetUser = expandedUsers.find((u) => u._id === resetPasswordSuccess.userId);
+                                                if (!targetUser) return;
+                                                const companyId = targetUser.company_id;
+                                                if (!companyId) return alert("No company associated");
+                                                setCredentialEmailSending(true);
+                                                setCredentialEmailSent(null);
+                                                try {
+                                                  const res = await apiFetchJson(
+                                                    `/api/admin/companies/${companyId}/send-credentials`,
+                                                    {
+                                                      method: "POST",
+                                                      body: JSON.stringify({
+                                                        admin_email: targetUser.email,
+                                                        admin_password: resetPasswordSuccess.new_password,
+                                                      }),
+                                                    }
+                                                  );
+                                                  setCredentialEmailSent(res.ok ? "sent" : "failed");
+                                                } catch {
+                                                  setCredentialEmailSent("failed");
+                                                } finally {
+                                                  setCredentialEmailSending(false);
+                                                }
+                                              }}
+                                            >
+                                              {credentialEmailSending ? (
+                                                <><Loader2 size={13} className="spin" /> Sending</>
+                                              ) : credentialEmailSent === "sent" ? (
+                                                <>✓ Sent</>
+                                              ) : credentialEmailSent === "failed" ? (
+                                                <><Mail size={13} /> Retry</>
+                                              ) : (
+                                                <><Mail size={13} /> Send via Email</>
+                                              )}
                                             </button>
                                           </div>
                                         </div>
@@ -1090,6 +1254,56 @@ export function SuperAdminDashboard() {
                                             setNewPasswordInput("");
                                             setShowNewPassword(false);
                                           }}
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                  {editingUserId && (
+                                    <div className="reset-password-panel">
+                                      <div className="expand-section-head" style={{ marginBottom: 8 }}>
+                                        <Pencil size={13} />
+                                        <h4>
+                                          Edit Member: {expandedUsers.find((u) => u._id === editingUserId)?.full_name}
+                                        </h4>
+                                      </div>
+                                      <div className="flex-row gap-2 align-center" style={{ flexWrap: "wrap" }}>
+                                        <input
+                                          type="text"
+                                          className="input-field input-sm"
+                                          placeholder="Full Name"
+                                          value={editUserForm.full_name}
+                                          onChange={(e) => setEditUserForm((prev) => ({ ...prev, full_name: e.target.value }))}
+                                          style={{ flex: "1 1 180px", minWidth: 150 }}
+                                        />
+                                        <input
+                                          type="email"
+                                          className="input-field input-sm"
+                                          placeholder="Email"
+                                          value={editUserForm.email}
+                                          onChange={(e) => setEditUserForm((prev) => ({ ...prev, email: e.target.value }))}
+                                          style={{ flex: "1 1 200px", minWidth: 180 }}
+                                        />
+                                        <select
+                                          className="select-field input-sm"
+                                          value={editUserForm.role}
+                                          onChange={(e) => setEditUserForm((prev) => ({ ...prev, role: e.target.value }))}
+                                          style={{ flex: "0 0 160px" }}
+                                        >
+                                          <option value="company_admin">Company Admin</option>
+                                          <option value="sub_user">HR / Interviewer</option>
+                                        </select>
+                                        <button
+                                          className="btn btn-primary btn-xs"
+                                          onClick={() => handleSaveEditUser(editingUserId)}
+                                          disabled={editUserLoading || !editUserForm.full_name || !editUserForm.email}
+                                        >
+                                          {editUserLoading ? "Saving…" : "Save Changes"}
+                                        </button>
+                                        <button
+                                          className="btn btn-secondary btn-xs"
+                                          onClick={() => setEditingUserId(null)}
                                         >
                                           Cancel
                                         </button>
@@ -1240,7 +1454,7 @@ export function SuperAdminDashboard() {
               </div>
             </div>
             <p className="text-sm text-muted mt-2">
-              Configure monthly price, user seat cap, and job drive limit for each plan tier.
+              Configure monthly price, user seat cap, and candidate limit for each plan tier.
             </p>
             <div className="plan-pricing-grid mt-4">
               {PLAN_TIERS.map((tier) => (
@@ -1264,14 +1478,14 @@ export function SuperAdminDashboard() {
                       />
                     </div>
                     <div className="plan-pricing-field">
-                      <label className="text-xs text-muted">Max jobs</label>
+                      <label className="text-xs text-muted">Max candidates</label>
                       <input
                         type="number"
                         className="input-field input-sm"
-                        value={draftPlans[tier.id].max_jobs}
-                        onChange={(e) => updateDraftPlan(tier.id, "max_jobs", e.target.value)}
+                        value={draftPlans[tier.id].max_candidates}
+                        onChange={(e) => updateDraftPlan(tier.id, "max_candidates", e.target.value)}
                         min="1"
-                        max="1000"
+                        max="100000"
                       />
                     </div>
                     <div className="plan-pricing-field">

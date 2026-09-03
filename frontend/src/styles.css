@@ -4369,3 +4369,111 @@ td span {
     position: static;
   }
 }
+
+/* ── Email send button in invite rows ─────────────────────────────────── */
+.invite-link-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text-muted, #94a3b8);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.icon-button:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.1);
+  color: #818cf8;
+  border-color: rgba(99, 102, 241, 0.3);
+}
+.icon-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.email-send-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text-muted, #94a3b8);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.email-send-btn:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.1);
+  color: #818cf8;
+  border-color: rgba(99, 102, 241, 0.3);
+}
+.email-send-btn.sent {
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.3);
+}
+.email-send-btn.failed {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+
+/* JD Change Approval Panel */
+.approve-panel {
+  margin-bottom: 1rem;
+}
+.approve-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+.approve-panel-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.approve-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.approve-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  border-left: 3px solid #f59e0b;
+  border-radius: 10px;
+  background: #fff;
+}
+.approve-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.approve-item-main p {
+  margin: 0;
+  color: #4b5563;
+}
+.approve-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
