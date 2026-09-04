@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.env.example
+venv/
+__pycache__/
+*.pyc
+.claude/
+temp_files/
+frontend/node_modules/
+frontend/dist/
+.dist/
+.streamlit/
+AI_Hiring_Platform_TDD (1).docx

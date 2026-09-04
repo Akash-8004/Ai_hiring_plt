@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: ai-hiring-platform
+    runtime: docker
+    dockerfilePath: Dockerfile
+    healthCheckPath: /api/auth/me
+    envVars:
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: SUPER_ADMIN_EMAIL
+        value: admin@aihiring.com
+      - key: SUPER_ADMIN_PASSWORD
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: VITE_API_BASE
+        value: ""
+      - key: AI_PROVIDER
+        value: gemini
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_LIVE_MODEL
+        value: gemini-3.1-flash-live-preview
+      - key: GEMINI_LIVE_VOICE
+        value: Leda
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM_EMAIL
+        sync: false
+      - key: SMTP_FROM_NAME
+        value: AI Hiring Platform
+      - key: SHORTLIST_THRESHOLD
+        value: "80"

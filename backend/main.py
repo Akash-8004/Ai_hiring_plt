@@ -14,7 +14,8 @@ from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend.core.models import JobDescription, ParsedResume
@@ -1424,4 +1425,29 @@ def _enforce_candidate_limit(company_id: str | None) -> None:
             status_code=403,
             detail=f"Candidate limit reached ({count}/{max_candidates}). Upgrade your plan to add more candidates.",
         )
+
+
+# ── Static frontend hosting (production) ────────────────────────────────────
+
+_DIST_DIR = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+_ASSETS_DIR = _DIST_DIR / "assets"
+
+if _ASSETS_DIR.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_ASSETS_DIR)), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def _spa_fallback(full_path: str):
+        """Serve the built React SPA for any non-API, non-socket route."""
+        if full_path.split("/")[0] in {"api", "ws", "assets", "docs", "redoc", "openapi.json"}:
+            raise HTTPException(status_code=404)
+        index_file = _DIST_DIR / "index.html"
+        if index_file.exists():
+            return FileResponse(str(index_file))
+        return HTMLResponse(content="Frontend not built. Run `npm run build` in frontend/ and redeploy.")
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
 
