@@ -9,7 +9,7 @@
 
    Capture uses ScriptProcessorNode for broad browser compatibility. */
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_BASE || "";
 const OUTPUT_SAMPLE_RATE = 24000;
 
 function toBase64(buffer) {

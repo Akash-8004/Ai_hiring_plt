@@ -21,7 +21,7 @@ import { createLiveClient } from "./liveClient";
 import ProctoringWarningModal from "./ProctoringWarningModal";
 import useProctoring from "../../hooks/useProctoring";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 // The interviewer announces the written coding questions with phrases like
 // "hiring team" / "answer box" / "write your answer". Show the question panel

@@ -3,7 +3,7 @@ import { Loader2, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { Field } from "../common/Field";
 import { useAuth } from "../../hooks/useAuth";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 function splitCsv(value) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);

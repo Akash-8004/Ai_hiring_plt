@@ -2,7 +2,7 @@
  * Central API utility with automatic Authorization token attachment and 401 handling.
  */
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
+const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 export async function apiFetch(path, options = {}) {
   const token = localStorage.getItem("ai_hiring_access_token");

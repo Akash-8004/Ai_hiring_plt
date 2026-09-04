@@ -3,7 +3,7 @@ import { XCircle, Video, Play, X } from "lucide-react";
 import { StatusBadge } from "../common/StatusBadge";
 import { CopyButton } from "../common/CopyButton";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 export function CandidatePanel({ candidate, onClose }) {
   const hrInvitation = candidate.hr_invitation;
