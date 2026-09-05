@@ -37,5 +37,9 @@ services:
         sync: false
       - key: SMTP_FROM_NAME
         value: AI Hiring Platform
+      - key: EMAIL_PROVIDER
+        value: smtp
+      - key: SENDGRID_API_KEY
+        sync: false
       - key: SHORTLIST_THRESHOLD
         value: "80"
