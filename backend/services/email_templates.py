@@ -5,20 +5,56 @@ be passed to ``email_service.send_email``.
 """
 
 
+from datetime import datetime
+
+
+def _format_deadline(deadline: str | None) -> str:
+    """Format an ISO 8601 deadline for display in the invitation email."""
+    if not deadline:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(deadline).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return str(deadline)
+    if dt.tzinfo is None:
+        local_now = datetime.now()
+        return local_now.strftime("%B %d, %Y") + " " + dt.strftime("%I:%M %p")
+    return dt.strftime("%B %d, %Y at %I:%M %p %Z")
+
+
 def interview_invite_email(
     candidate_name: str,
     interview_type: str,
     link: str,
+    deadline: str | None = None,
 ) -> tuple[str, str, str]:
-    """Build an interview invitation email."""
+    """Build an interview invitation email with an optional completion deadline."""
     round_label = interview_type.replace("_", " ").title()
     subject = f"Interview Invitation — {round_label} Round"
+
+    formatted_deadline = _format_deadline(deadline)
+    plain_deadline = (
+        f"\nPlease complete this interview before: {formatted_deadline}\n"
+        if formatted_deadline
+        else ""
+    )
+    html_deadline = (
+        f'<p style="margin: 16px 0; padding: 10px 14px; background: #fef3c7; color: #92400e; border-radius: 6px; font-weight: 600;">'
+        f'<span role="img" aria-label="calendar">\U0001f4c5</span> Please complete this interview before: '
+        f'{formatted_deadline}</p>'
+        if formatted_deadline
+        else ""
+    )
+    expiry_notice = "After the deadline passes, this link will no longer work.\n\n" if formatted_deadline else ""
+    html_expiry_notice = '<p style="font-size: 12px; color: #94a3b8;">After the deadline passes, this link will no longer work.</p>' if formatted_deadline else ""
 
     plain_body = (
         f"Dear {candidate_name},\n\n"
         f"You have been invited to complete the {round_label} round of our interview process.\n\n"
         f"Please use the link below to begin your interview:\n"
-        f"{link}\n\n"
+        f"{link}\n"
+        f"{plain_deadline}\n"
+        f"{expiry_notice}"
         f"This link is unique to you — please do not share it with anyone.\n\n"
         f"Good luck!\n"
         f"— AI Hiring Platform"
@@ -37,6 +73,8 @@ def interview_invite_email(
     <a href="{link}" style="display: inline-block; padding: 10px 24px; background: #6366f1; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Start Interview</a>
   </p>
   <p style="font-size: 13px; color: #64748b;">Or copy this URL: <a href="{link}" style="color: #6366f1;">{link}</a></p>
+  {html_deadline}
+  {html_expiry_notice}
   <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
   <p style="font-size: 12px; color: #94a3b8;">This link is unique to you — please do not share it with anyone.</p>
 </body>

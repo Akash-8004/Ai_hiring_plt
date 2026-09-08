@@ -21,7 +21,7 @@ const PRODUCT_ITEMS = [
     to: "/features",
     icon: Mic,
     title: "Live Voice AI Interviews",
-    badge: "Gemini Live",
+    badge: "Live AI",
     desc: "Autonomous HR and technical rounds with real-time speech transcription.",
     theme: "teal",
   },
@@ -188,7 +188,7 @@ export function MarketingNav() {
             </div>
             <div className="mkt-mega-col-side">
               <div className="mkt-spotlight-card">
-                <h5><Sparkles size={14} /> Gemini Live Demo</h5>
+                <h5><Sparkles size={14} /> Live AI Demo</h5>
                 <p>Experience human-like voice interview simulation with dynamic coding challenges.</p>
                 <Link to="/book-a-demo" className="mkt-spotlight-link" onClick={() => setActiveDropdown(null)}>
                   Book a live walkthrough <ArrowRight size={13} />

@@ -16,7 +16,7 @@ export function MarketingFooter() {
             <span>HireAI</span>
           </Link>
           <p>
-            Autonomous technical and HR interview platform powered by Gemini Live. Intelligent resume screening, real-time speech evaluation, and full pipeline management.
+            Autonomous technical and HR interview platform powered by live AI. Intelligent resume screening, real-time speech evaluation, and full pipeline management.
           </p>
 
           <div className="mkt-footer-badges">

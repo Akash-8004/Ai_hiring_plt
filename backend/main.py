@@ -19,14 +19,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend.core.models import JobDescription, ParsedResume
-from backend.core.sample_data import DEFAULT_JOB, SAMPLE_RESUMES
+from backend.core.sample_data import DEFAULT_JOB
 from backend.live.relay import GeminiLiveRelay
 from backend.services.ai_ranker import AIRankingService
 from backend.services.HR_Round.hr_evaluator import HREvaluator
 from backend.services.Technical.interviewer import get_interviewer_prompt
 from backend.services.Technical.question_processor import QuestionProcessor
 from backend.services.drive_metrics import compute_drive_metrics, score_candidates_for_drive
-from backend.services.resume_parser import parse_resume_text, parse_uploaded_resume
+from backend.services.resume_parser import clean_other_links, extract_other_links, parse_resume_text, parse_uploaded_resume_with_ai, parse_resume_text_with_ai
 from backend.services.Technical.technical_evaluator import TechnicalInterviewEvaluator
 from backend.services import r2_storage
 from backend.storage import database
@@ -157,6 +157,10 @@ class EvaluationPayload(BaseModel):
     token: str
     transcript: list[dict[str, str]] = Field(default_factory=list)
     interview_type: str = "hr"
+
+
+class DeadlinePayload(BaseModel):
+    deadline: str | None = None
 
 
 # ── Health (no auth) ───────────────────────────────────────────────────────
@@ -489,7 +493,7 @@ def add_manual_resume(
     job_id = _active_drive_id(company_id)
     if not job_id:
         raise HTTPException(status_code=400, detail="Create a job drive first")
-    resume = parse_resume_text(payload.file_name, payload.text)
+    resume = parse_resume_text_with_ai(payload.file_name, payload.text)
     _enforce_candidate_limit(company_id)
     database.upsert_candidate(resume, company_id=company_id, job_id=job_id)
     log_activity(
@@ -515,7 +519,8 @@ async def upload_resumes(
         raise HTTPException(status_code=400, detail="Create a job drive first")
     file_names = []
     for file in files:
-        resume = _parse_uploaded_bytes(file.filename or "resume.txt", await file.read())
+        contents = await file.read()
+        resume = await asyncio.to_thread(_parse_uploaded_bytes, file.filename or "resume.txt", contents)
         _enforce_candidate_limit(company_id)
         database.upsert_candidate(resume, company_id=company_id, job_id=job_id)
         file_names.append(file.filename)
@@ -529,70 +534,73 @@ async def upload_resumes(
     return _workspace_payload(company_id, user, job_id=job_id)
 
 
-@app.post("/api/resumes/sample")
-def load_sample_resumes(
-    user: dict = Depends(require_permission("manage_resumes")),
-) -> dict[str, Any]:
-    company_id = str(user["company_id"]) if user.get("company_id") else None
-    job_id = _active_drive_id(company_id)
-    if not job_id:
-        raise HTTPException(status_code=400, detail="Create a job drive first")
-    database.clear_candidates(company_id, job_id=job_id)
-    for index, text in enumerate(SAMPLE_RESUMES):
-        resume = parse_resume_text(f"sample_resume_{index + 1}.txt", text)
-        _enforce_candidate_limit(company_id)
-        database.upsert_candidate(resume, company_id=company_id, job_id=job_id)
-    return _workspace_payload(company_id, user, job_id=job_id)
-
-
-@app.delete("/api/resumes")
-def clear_resumes(
-    user: dict = Depends(require_company_admin),
-    request: Request = None,
-) -> dict[str, Any]:
-    company_id = str(user["company_id"]) if user.get("company_id") else None
-    job_id = _active_drive_id(company_id)
-    if not job_id:
-        raise HTTPException(status_code=400, detail="Create a job drive first")
-    database.clear_candidates(company_id, job_id=job_id)
-    log_activity(
-        action="candidate.all_cleared",
-        category="candidate",
-        actor=user,
-        severity="critical",
-        request=request,
-    )
-    return _workspace_payload(company_id, user, job_id=job_id)
-
-
 # ── Invitation ──────────────────────────────────────────────────────────────
+
+@app.put("/api/job/deadline")
+def update_round_deadline(
+    interview_type: str,
+    payload: DeadlinePayload,
+    user: dict = Depends(require_permission("conduct_interviews")),
+) -> dict[str, Any]:
+    if interview_type not in ("hr", "technical"):
+        raise HTTPException(status_code=400, detail="Interview type must be 'hr' or 'technical'.")
+    company_id = str(user["company_id"]) if user.get("company_id") else None
+    job_id = _active_drive_id(company_id)
+    if not company_id or not job_id:
+        raise HTTPException(status_code=400, detail="Create a job drive first.")
+    database.set_job_deadline(company_id, job_id, interview_type, _normalise_deadline(payload.deadline))
+    return _workspace_payload(company_id, user, job_id=job_id)
+
 
 @app.post("/api/candidates/{email}/invite")
 def invite_candidate(
     email: str,
     interview_type: str = "technical",
-    send_email: bool = False,
+    send_email: bool = True,
     user: dict = Depends(require_permission("conduct_interviews")),
     request: Request = None,
 ) -> dict[str, Any]:
     """Generate an interview invitation link. interview_type can be 'technical' or 'hr'."""
+    if interview_type not in ("hr", "technical"):
+        raise HTTPException(status_code=400, detail="Interview type must be 'hr' or 'technical'.")
     company_id = str(user["company_id"]) if user.get("company_id") else None
     candidate_doc = database.get_candidate_doc(email, company_id)
     if not candidate_doc:
         raise HTTPException(status_code=404, detail="Candidate not found.")
     job_id = candidate_doc.get("job_id")
-    token = secrets.token_urlsafe(12)
-    invitation = {
-        "token": token,
-        "type": interview_type,
-        "link": f"http://127.0.0.1:5173/?interview={token}&type={interview_type}",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    # Store under the right invitation key
-    if interview_type == "hr":
-        database.set_candidate_hr_invitation(email, invitation, company_id, job_id)
-    else:
-        database.set_candidate_invitation(email, invitation, company_id, job_id)
+    job_doc = database.get_job_doc(company_id, job_id) if company_id and job_id else None
+    job_doc = job_doc or {}
+    deadline_field = (
+        "hr_deadline" if interview_type == "hr" else "technical_deadline"
+    )
+    deadline = job_doc.get(deadline_field) if job_doc else None
+    if not deadline:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Set a {interview_type} deadline before sending invitations.",
+        )
+    if _deadline_has_passed(deadline):
+        raise HTTPException(status_code=400, detail=f"The {interview_type} deadline has passed.")
+    if interview_type == "technical" and _deadline_is_active(job_doc.get("hr_deadline")):
+        raise HTTPException(status_code=403, detail="Technical round unlocks after the HR deadline passes.")
+    if interview_type == "technical" and (candidate_doc.get("hr_interview") or {}).get("decision") not in ("PASS", "FAIL"):
+        raise HTTPException(status_code=400, detail="Candidate must complete the HR round before a technical invitation can be issued.")
+    invitation_key = "hr_invitation" if interview_type == "hr" else "invitation"
+    invitation = candidate_doc.get(invitation_key) or {}
+    if not invitation.get("token"):
+        token = secrets.token_urlsafe(12)
+        invitation = {
+            "token": token,
+            "type": interview_type,
+            "link": f"http://127.0.0.1:5173/?interview={token}&type={interview_type}",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at": deadline,
+        }
+        if interview_type == "hr":
+            database.set_candidate_hr_invitation(email, invitation, company_id, job_id)
+        else:
+            database.set_candidate_invitation(email, invitation, company_id, job_id)
+    token = invitation["token"]
     log_activity(
         action=f"candidate.invited_{interview_type}",
         category="candidate",
@@ -617,7 +625,7 @@ def invite_candidate(
                 app_url = os.getenv("APP_URL", "http://localhost:5173")
                 email_link = f"{app_url}/?interview={token}&type={interview_type}"
                 subject, html_body, plain_body = interview_invite_email(
-                    candidate_name, interview_type, email_link,
+                    candidate_name, interview_type, email_link, deadline=invitation.get("expires_at"),
                 )
                 result = email_service.send_email(email, subject, html_body, plain_body)
                 email_sent = result.get("ok", False)
@@ -652,6 +660,7 @@ def interview_session(token: str) -> dict[str, Any]:
     candidate_doc = database.get_candidate_doc(email, company_id)
     if not candidate_doc:
         raise HTTPException(status_code=404, detail="Candidate not found.")
+    _ensure_invitation_active(token, candidate_doc)
 
     job_id = candidate_doc.get("job_id")
     candidates = database.load_candidates(company_id, job_id=job_id)
@@ -713,6 +722,9 @@ def evaluate_interview(payload: EvaluationPayload) -> dict[str, Any]:
     if not email:
         raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
     candidate_doc = database.get_candidate_doc(email, company_id) or {}
+    invitation = _ensure_invitation_active(payload.token, candidate_doc)
+    if payload.interview_type != invitation.get("type", "technical"):
+        raise HTTPException(status_code=400, detail="Interview type does not match invitation.")
     job_id = candidate_doc.get("job_id")
     candidates = database.load_candidates(company_id, job_id=job_id)
     resume = next((c for c in candidates if c.email == email), None)
@@ -741,6 +753,7 @@ async def upload_recording(
         raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
 
     candidate_doc = database.get_candidate_doc(email, company_id) or {}
+    _ensure_invitation_active(token, candidate_doc)
     job_id = candidate_doc.get("job_id")
 
     file_bytes = await file.read()
@@ -851,6 +864,12 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
         return
 
     candidate_doc = database.get_candidate_doc(email, company_id)
+    try:
+        _ensure_invitation_active(token, candidate_doc or {})
+    except HTTPException as exc:
+        await websocket.send_json({"type": "error", "message": exc.detail, "expired": exc.status_code == 410})
+        await websocket.close(code=1008)
+        return
     job_id = (candidate_doc or {}).get("job_id")
     candidates = database.load_candidates(company_id, job_id=job_id)
     resume = next((c for c in candidates if c.email == email), None)
@@ -1130,7 +1149,14 @@ def _workspace_payload(
 ) -> dict[str, Any]:
     effective_job_id = _resolve_effective_job_id(company_id, job_id) if company_id else None
     drive = database.get_job_by_id(company_id, effective_job_id) if company_id and effective_job_id else None
-    current_job = drive or (database.load_job(company_id) if company_id else None) or DEFAULT_JOB
+    stored_job = drive
+    current_job = stored_job or DEFAULT_JOB
+    job_doc = database.get_job_doc(company_id, effective_job_id) if company_id and effective_job_id else {}
+    _auto_fail_missed_deadlines(company_id, effective_job_id, job_doc or {})
+    hr_deadline = (job_doc or {}).get("hr_deadline")
+    technical_deadline = (job_doc or {}).get("technical_deadline")
+    hr_deadline_passed = _deadline_has_passed(hr_deadline)
+    technical_deadline_passed = _deadline_has_passed(technical_deadline)
     candidate_resumes = (
         database.load_candidates(company_id, job_id=effective_job_id)
         if company_id
@@ -1146,6 +1172,19 @@ def _workspace_payload(
         row["fileName"] = result.candidate.file_name
         row["linkedin"] = result.candidate.linkedin
         row["github"] = result.candidate.github
+        derived_links = extract_other_links(result.candidate.raw_text, result.candidate.linkedin)
+        row["otherLinks"] = list({
+            link["url"]: link
+            for link in clean_other_links(result.candidate.other_links) + derived_links
+            if link.get("url")
+        }.values())
+        row["education"] = result.candidate.education
+        row["extractedSkills"] = result.candidate.skills
+        row["resumeText"] = result.candidate.raw_text
+        row["jobTitle"] = result.candidate.job_title
+        row["location"] = result.candidate.location
+        row["professionalSummary"] = result.candidate.summary
+        row["parsingProvider"] = result.candidate.parsing_provider
         row["breakdown"] = result.score.breakdown
         row["uploadedAt"] = result.candidate.uploaded_at.isoformat()
         doc = database.get_candidate_doc(
@@ -1159,6 +1198,7 @@ def _workspace_payload(
         row["hr_interview"] = doc.get("hr_interview")
         row["interview_transcript"] = doc.get("interview_transcript") or []
         row["email_sent"] = doc.get("email_sent") or {}
+        row["tech_round_locked"] = _deadline_is_active(hr_deadline)
         row["recording"] = (doc.get("technical_interview") or {}).get("recording") or (doc.get("hr_interview") or {}).get("recording")
         rows.append(row)
 
@@ -1201,15 +1241,20 @@ def _workspace_payload(
 
     return {
         "company": company_info,
-        "job": asdict(current_job),
+        "job": asdict(stored_job) if stored_job else None,
         "job_id": effective_job_id,
         "drives": drives,
         "metrics": metrics,
         "jd_requests": _jd_requests_for_user(company_id, user),
         "screening": {
-            "provider": ranking_service.last_provider_used,
-            "model": ranking_service.model,
-            "message": ranking_service.last_error,
+            "provider": "AI-powered",
+            "message": "AI screening fallback is active." if ranking_service.last_error else "",
+        },
+        "deadlines": {
+            "hr": hr_deadline,
+            "technical": technical_deadline,
+            "hr_passed": hr_deadline_passed,
+            "technical_passed": technical_deadline_passed,
         },
         "candidates": rows,
     }
@@ -1376,6 +1421,84 @@ def _run_interview_evaluation(
     return {"email": email, "interview_type": interview_type, **result}
 
 
+def _parse_deadline(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _normalise_deadline(value: str | None) -> str | None:
+    if value in (None, ""):
+        return None
+    parsed = _parse_deadline(value)
+    if not parsed:
+        raise HTTPException(status_code=400, detail="Deadline must be a valid ISO 8601 datetime.")
+    return parsed.isoformat()
+
+
+def _deadline_has_passed(value: str | None) -> bool:
+    parsed = _parse_deadline(value)
+    return bool(parsed and parsed <= datetime.now(timezone.utc))
+
+
+def _deadline_is_active(value: str | None) -> bool:
+    parsed = _parse_deadline(value)
+    return bool(parsed and parsed > datetime.now(timezone.utc))
+
+
+def _invitation_for_token(token: str, candidate_doc: dict) -> dict | None:
+    for field in ("invitation", "hr_invitation"):
+        invitation = candidate_doc.get(field) or {}
+        if invitation.get("token") == token:
+            return invitation
+    return None
+
+
+def _ensure_invitation_active(token: str, candidate_doc: dict) -> dict:
+    invitation = _invitation_for_token(token, candidate_doc)
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
+    if _deadline_has_passed(invitation.get("expires_at")):
+        raise HTTPException(
+            status_code=410,
+            detail="This interview invitation has expired. Please contact the hiring team.",
+        )
+    return invitation
+
+
+def _auto_fail_missed_deadlines(company_id: str | None, job_id: str | None, job_doc: dict) -> None:
+    if not company_id or not job_id:
+        return
+    for resume in database.load_candidates(company_id, job_id=job_id):
+        doc = database.get_candidate_doc(resume.email, company_id, job_id) or {}
+        for interview_type, invitation_key, interview_key in (
+            ("hr", "hr_invitation", "hr_interview"),
+            ("technical", "invitation", "technical_interview"),
+        ):
+            invitation = doc.get(invitation_key) or {}
+            interview = doc.get(interview_key) or {}
+            if invitation.get("token") and interview.get("status") != "completed" and _deadline_has_passed(invitation.get("expires_at")):
+                failed = {
+                    "status": "completed",
+                    "type": interview_type,
+                    "decision": "FAIL",
+                    "score": 0,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "auto_failed": True,
+                    "reason": "Interview deadline passed before completion.",
+                }
+                if interview_type == "hr":
+                    database.set_candidate_hr_interview(resume.email, failed, company_id, job_id)
+                else:
+                    database.set_candidate_technical_interview(resume.email, failed, company_id, job_id)
+
+
 def _candidate_ref_for_token(token: str) -> tuple[str | None, str | None]:
     """Resolve (email, company_id) from a globally-unique interview token.
 
@@ -1406,8 +1529,8 @@ def _parse_uploaded_bytes(file_name: str, contents: bytes) -> ParsedResume:
     stream.name = file_name
 
     if suffix in {".txt", ".docx", ".pdf"}:
-        return parse_uploaded_resume(stream)
-    return parse_resume_text(file_name, contents.decode("utf-8", errors="ignore"))
+        return parse_uploaded_resume_with_ai(stream)
+    return parse_resume_text_with_ai(file_name, contents.decode("utf-8", errors="ignore"))
 
 
 def _enforce_candidate_limit(company_id: str | None) -> None:
@@ -1450,4 +1573,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("backend.main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
-

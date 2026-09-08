@@ -17,6 +17,8 @@ class JobDescription:
     hr_interview_duration: int = 7
     technical_interview_duration: int = 5
     custom_questions: list[dict] = field(default_factory=list)
+    hr_deadline: str | None = None
+    technical_deadline: str | None = None
 
 
 @dataclass
@@ -31,6 +33,11 @@ class ParsedResume:
     linkedin: str = ""
     github: str = ""
     raw_text: str = ""
+    job_title: str = ""
+    location: str = ""
+    summary: str = ""
+    parsing_provider: str = "regex-fallback"
+    other_links: list[dict[str, str]] = field(default_factory=list)
     uploaded_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

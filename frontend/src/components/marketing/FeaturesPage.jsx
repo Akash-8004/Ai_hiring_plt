@@ -22,7 +22,7 @@ const FEATURE_CATEGORIES = [
       {
         icon: Cpu,
         title: "Semantic Skill Scoring",
-        desc: "Powered by Gemini AI with robust deterministic local fallback to ensure 100% processing reliability.",
+        desc: "Powered by advanced AI with a robust local fallback to ensure 100% processing reliability.",
       },
       {
         icon: CheckCircle2,
@@ -33,7 +33,7 @@ const FEATURE_CATEGORIES = [
   },
   {
     category: "Live Voice AI Interviewing",
-    eyebrow: "Gemini Live Relay",
+    eyebrow: "Live AI Relay",
     desc: "Browser-native 2-way conversational voice interviews that evaluate technical problem solving and communication.",
     items: [
       {

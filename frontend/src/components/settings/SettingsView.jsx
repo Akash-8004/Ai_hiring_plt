@@ -6,7 +6,7 @@ export function SettingsView() {
     <section className="settings-grid">
       {[
         ["Tenant Isolation", "Company-scoped data model placeholder"],
-        ["AI Provider", "Gemini integration for screening and interviews"],
+        ["AI Provider", "AI-powered screening and interviews"],
         ["Email Provider", "SendGrid, SES, Mailgun integration slot"],
         ["Interview Modules", "AI technical and HR interview modules active"],
       ].map(([title, copy]) => (

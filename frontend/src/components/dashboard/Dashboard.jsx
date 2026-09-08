@@ -55,6 +55,7 @@ export function Dashboard({
   onStatusFilter,
   onQuery,
   onCandidate,
+  onViewDetails,
   onGoToJob,
   onGoToUpload,
   drives,
@@ -99,11 +100,9 @@ export function Dashboard({
           <span className="pill">Active Job</span>
           <h2>{job.title}</h2>
           <p>{job.department} · {job.location} · {job.experience_years}+ years</p>
-          <p className="provider-line">
-            Screening: {workspace.screening?.provider || "local"} · {workspace.screening?.model || "template scorer"}
-          </p>
+          <p className="provider-line">Screening: AI-powered analysis</p>
           {workspace.screening?.message ? (
-            <p className="provider-warning">{workspace.screening.message}</p>
+            <p className="provider-warning">AI screening fallback is active.</p>
           ) : null}
           <div className="skill-row">
             {job.required_skills.map((skill) => <span key={skill}>{skill}</span>)}
@@ -113,7 +112,7 @@ export function Dashboard({
           {onGoToJob ? (
             <button className="secondary-button" onClick={onGoToJob}>
               <BriefcaseBusiness size={17} />
-              Edit JD
+              {workspace?.job ? "Edit JD" : "Create Job Drive"}
             </button>
           ) : null}
           {onGoToUpload ? (
@@ -148,7 +147,7 @@ export function Dashboard({
             </select>
           </div>
         </div>
-        <CandidateTable candidates={candidates} onCandidate={onCandidate} />
+        <CandidateTable candidates={candidates} onCandidate={onCandidate} onViewDetails={onViewDetails} />
       </section>
     </section>
   );

@@ -704,7 +704,7 @@ _JOB_DESCRIPTION_FIELDS = {
     "title", "department", "location", "experience_years",
     "required_skills", "nice_to_have_skills", "education",
     "description", "threshold", "hr_interview_duration",
-    "technical_interview_duration", "custom_questions",
+    "technical_interview_duration", "custom_questions", "hr_deadline", "technical_deadline",
 }
 
 
@@ -730,6 +730,8 @@ def _job_to_dict(
         "hr_interview_duration": job.hr_interview_duration,
         "technical_interview_duration": job.technical_interview_duration,
         "custom_questions": job.custom_questions,
+        "hr_deadline": job.hr_deadline,
+        "technical_deadline": job.technical_deadline,
         "job_id": job_id,
         "company_id": str(company_id),
         "status": status,
@@ -768,6 +770,9 @@ def upsert_job(job: JobDescription, company_id: str, job_id: str | None = None) 
         created = existing.get("created_at", now) if existing else now
         status = existing.get("status", "active") if existing else "active"
         doc = _job_to_dict(job, cid, job_id, status=status, created_at=created, updated_at=now)
+        if existing:
+            doc["hr_deadline"] = existing.get("hr_deadline")
+            doc["technical_deadline"] = existing.get("technical_deadline")
     _jobs.replace_one({"company_id": cid, "job_id": job_id}, doc, upsert=True)
     stored = _jobs.find_one({"company_id": cid, "job_id": job_id}) or doc
     return stored
@@ -778,6 +783,14 @@ def get_job_by_id(company_id: str, job_id: str) -> JobDescription | None:
     if not doc:
         return None
     return _dict_to_job(doc)
+
+
+def set_job_deadline(company_id: str, job_id: str, interview_type: str, deadline: str | None) -> None:
+    field = "hr_deadline" if interview_type == "hr" else "technical_deadline"
+    _jobs.update_one(
+        {"company_id": str(company_id), "job_id": job_id},
+        {"$set": {field: deadline, "updated_at": datetime.now(timezone.utc)}},
+    )
 
 
 def get_job_doc(company_id: str, job_id: str) -> dict | None:
@@ -1038,12 +1051,21 @@ def load_candidates(company_id: str | None = None, job_id: str | None = None) ->
     valid_fields = {
         "file_name", "full_name", "email", "phone", "skills",
         "experience_years", "education", "linkedin", "github",
-        "raw_text", "uploaded_at",
+        "raw_text", "job_title", "location", "summary", "parsing_provider", "uploaded_at",
+        "other_links",
     }
     query = _candidate_query(company_id, job_id)
     for doc in _candidates.find(query):
         doc["uploaded_at"] = doc.get("uploaded_at") or datetime.now(timezone.utc)
         clean_doc = {k: v for k, v in doc.items() if k in valid_fields}
+        clean_doc.setdefault("phone", "Not found")
+        clean_doc.setdefault("linkedin", "")
+        clean_doc.setdefault("github", "")
+        clean_doc.setdefault("job_title", "")
+        clean_doc.setdefault("location", "")
+        clean_doc.setdefault("summary", "")
+        clean_doc.setdefault("parsing_provider", "legacy")
+        clean_doc.setdefault("other_links", [])
         if clean_doc.get("email"):
             resumes.append(ParsedResume(**clean_doc))
     return resumes
@@ -1061,6 +1083,11 @@ def _resume_to_dict(resume: ParsedResume) -> dict:
         "linkedin": resume.linkedin,
         "github": resume.github,
         "raw_text": resume.raw_text,
+        "job_title": resume.job_title,
+        "location": resume.location,
+        "summary": resume.summary,
+        "parsing_provider": resume.parsing_provider,
+        "other_links": resume.other_links,
         "uploaded_at": resume.uploaded_at,
     }
 
@@ -1078,14 +1105,6 @@ def upsert_candidate(
     if job_id:
         doc["job_id"] = job_id
     _candidates.replace_one(_candidate_filter(resume.email, company_id, job_id), doc, upsert=True)
-
-
-def clear_candidates(company_id: str | None = None, job_id: str | None = None) -> None:
-    query = _candidate_query(company_id, job_id)
-    if query:
-        _candidates.delete_many(query)
-    else:
-        _candidates.delete_many({})
 
 
 def get_candidate_doc(email: str, company_id: str | None = None, job_id: str | None = None) -> dict | None:

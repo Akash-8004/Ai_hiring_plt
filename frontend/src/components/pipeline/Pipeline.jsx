@@ -1,10 +1,25 @@
-import React, { useState } from "react";
-import { Loader2, Mail, Send, UsersRound } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { CalendarClock, Loader2, Send } from "lucide-react";
 import { PipelineCandidateRow } from "./PipelineCandidateRow";
-import { apiFetchJson } from "../../utils/api";
 
-export function Pipeline({ candidates, onInvite, onRefresh, canInvite = false, busy }) {
-  const [emailSending, setEmailSending] = useState({});
+function toInputValue(deadline) {
+  return deadline ? new Date(deadline).toISOString().slice(0, 16) : "";
+}
+
+function deadlineStatus(deadline) {
+  if (!deadline) return "No deadline set";
+  const remaining = new Date(deadline).getTime() - Date.now();
+  if (remaining <= 0) return "Expired";
+  const hours = Math.ceil(remaining / 3600000);
+  return `${Math.floor(hours / 24)}d ${hours % 24}h remaining`;
+}
+
+export function Pipeline({ candidates, onInvite, onRefresh, onDeadline, deadlines = {}, canInvite = false, busy }) {
+  const [deadlineValues, setDeadlineValues] = useState({ hr: toInputValue(deadlines.hr), technical: toInputValue(deadlines.technical) });
+
+  useEffect(() => {
+    setDeadlineValues({ hr: toInputValue(deadlines.hr), technical: toInputValue(deadlines.technical) });
+  }, [deadlines.hr, deadlines.technical]);
 
   const uploaded = candidates.length;
   const shortlisted = candidates.filter((c) => c.Status === "Shortlisted");
@@ -17,22 +32,27 @@ export function Pipeline({ candidates, onInvite, onRefresh, canInvite = false, b
   const hiredList = candidates.filter((c) => c.technical_interview?.decision === "PASS" && c.hr_interview?.decision === "PASS");
   const hrInvitedEmails = new Set(hrInvited.map((c) => c.Email));
   const techInvitedEmails = new Set(techInvited.map((c) => c.Email));
+  const techLocked = !deadlines.hr_passed && !!deadlines.hr;
+  const technicalRoundActive = !!deadlines.hr_passed;
+  const activeRoundHasDeadline = technicalRoundActive
+    ? !!deadlines.technical && !deadlines.technical_passed
+    : !!deadlines.hr && !deadlines.hr_passed;
 
-  async function handleSendEmail(email, type) {
-    const key = `${email}:${type}`;
-    setEmailSending((prev) => ({ ...prev, [key]: true }));
-    try {
-      await apiFetchJson(
-        `/api/candidates/${encodeURIComponent(email)}/invite?interview_type=${type}&send_email=true`,
-        { method: "POST" }
-      );
-      alert("Email sent successfully!");
-      if (onRefresh) await onRefresh();
-    } catch (err) {
-      alert(`Email failed: ${err.message}`);
-    } finally {
-      setEmailSending((prev) => ({ ...prev, [key]: false }));
-    }
+  function deadlineControl(type, label) {
+    const deadline = deadlines[type];
+    return (
+      <div className="deadline-control">
+        <label>{label}</label>
+        <div>
+          <input type="datetime-local" value={deadlineValues[type]} onChange={(event) => setDeadlineValues((prev) => ({ ...prev, [type]: event.target.value }))} disabled={!canInvite || busy} />
+          <button className="secondary-button" onClick={() => onDeadline(type, deadlineValues[type] ? new Date(deadlineValues[type]).toISOString() : null)} disabled={!canInvite || busy}>
+            <CalendarClock size={15} /> Set / Update
+          </button>
+          {deadline ? <button className="text-button" onClick={() => onDeadline(type, null)} disabled={!canInvite || busy}>Clear</button> : null}
+        </div>
+        <span className={deadline && new Date(deadline) <= new Date() ? "deadline-expired" : "muted-cell"}>{deadlineStatus(deadline)}</span>
+      </div>
+    );
   }
 
   const pipelineStages = [
@@ -58,25 +78,26 @@ export function Pipeline({ candidates, onInvite, onRefresh, canInvite = false, b
         ))}
       </section>
 
-      {/* HR Interview Section */}
       <section className="table-section">
         <div className="section-toolbar">
           <div>
-            <h2><UsersRound size={18} /> HR Interview</h2>
-            <span>Invite shortlisted candidates to AI HR interview first</span>
+            {technicalRoundActive
+              ? deadlineControl("technical", "Technical deadline")
+              : deadlineControl("hr", "HR deadline")}
           </div>
           {canInvite ? (
             <button
               className="primary-button"
-              onClick={() => {
-                shortlisted
-                  .filter((c) => !hrInvitedEmails.has(c.Email))
-                  .forEach((c) => onInvite(c.Email, "hr"));
+              onClick={async () => {
+                const invitees = (technicalRoundActive ? hrPassed : shortlisted)
+                  .filter((c) => !(technicalRoundActive ? techInvitedEmails : hrInvitedEmails).has(c.Email))
+                await Promise.all(invitees.map((c) => onInvite(c.Email, technicalRoundActive ? "technical" : "hr")));
+                if (onRefresh) await onRefresh();
               }}
-              disabled={busy || !shortlisted.filter((c) => !hrInvitedEmails.has(c.Email)).length}
+              disabled={busy || !activeRoundHasDeadline || !(technicalRoundActive ? hrPassed : shortlisted).filter((c) => !(technicalRoundActive ? techInvitedEmails : hrInvitedEmails).has(c.Email)).length}
             >
               {busy ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
-              Invite for HR
+              {technicalRoundActive ? "Invite for Technical" : "Invite for HR"}
             </button>
           ) : null}
         </div>
@@ -104,10 +125,11 @@ export function Pipeline({ candidates, onInvite, onRefresh, canInvite = false, b
                     key={`${candidate.Email}-${candidate.Name}`}
                     candidate={candidate}
                     onInvite={onInvite}
-                    onSendEmail={handleSendEmail}
                     canInvite={canInvite}
                     busy={busy}
-                    emailSending={emailSending}
+                    techLocked={techLocked}
+                    hrDeadlineSet={!!deadlines.hr && !deadlines.hr_passed}
+                    technicalDeadlineSet={!!deadlines.technical && !deadlines.technical_passed}
                   />
                 ))}
               </tbody>

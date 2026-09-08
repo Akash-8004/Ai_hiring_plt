@@ -81,7 +81,10 @@ export function InterviewApp({ token, interviewType }) {
   useEffect(() => {
     fetch(`${API_BASE}/api/interview/session/${encodeURIComponent(token)}`)
       .then((response) => {
-        if (!response.ok) throw new Error("Interview session not found");
+        if (!response.ok) {
+          if (response.status === 410) throw new Error("EXPIRED_INVITATION");
+          throw new Error("Interview session not found");
+        }
         return response.json();
       })
       .then((data) => {
@@ -95,8 +98,8 @@ export function InterviewApp({ token, interviewType }) {
         }
       })
       .catch((err) => {
-        setError(err.message);
-        setPhase("error");
+        setError(err.message === "EXPIRED_INVITATION" ? "This interview invitation has expired. Please contact the hiring team." : err.message);
+        setPhase(err.message === "EXPIRED_INVITATION" ? "expired" : "error");
       });
   }, [token]);
 
@@ -407,7 +410,8 @@ export function InterviewApp({ token, interviewType }) {
       </header>
 
       <div className="interview-body">
-        {error ? <div className="notice error">{error}</div> : null}
+        {phase === "expired" ? <div className="interview-stage invitation-expired"><Clock size={36} /><strong>Invitation expired</strong><p>This interview invitation is no longer available. Please contact the hiring team for assistance.</p></div> : null}
+        {error && phase !== "expired" ? <div className="notice error">{error}</div> : null}
 
         {phase === "loading" && (
           <div className="interview-stage">

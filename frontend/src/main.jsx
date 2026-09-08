@@ -15,6 +15,7 @@ import { JdApprovalPanel } from "./components/job/JdApprovalPanel";
 import { ResumeIntake } from "./components/resumes/ResumeIntake";
 import { Pipeline } from "./components/pipeline/Pipeline";
 import { CandidatePanel } from "./components/candidate/CandidatePanel";
+import { CandidateResumePreview } from "./components/candidate/CandidateResumePreview";
 import { SettingsView } from "./components/settings/SettingsView";
 import { UsageView } from "./components/usage/UsageView";
 import { LoadingScreen } from "./components/common/LoadingScreen";
@@ -35,6 +36,7 @@ function App() {
   const [statusFilter, setStatusFilter] = useState("All");
   const [query, setQuery] = useState("");
   const [selectedCandidate, setSelectedCandidate] = useState(null);
+  const [previewCandidate, setPreviewCandidate] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -190,9 +192,27 @@ function App() {
     setError("");
     try {
       const data = await apiFetchJson(
-        `/api/candidates/${encodeURIComponent(email)}/invite?interview_type=${interviewType}`,
+        `/api/candidates/${encodeURIComponent(email)}/invite?interview_type=${interviewType}&send_email=true`,
         { method: "POST" }
       );
+      setWorkspace(data);
+      setActiveJobId(data.job_id || null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function updateDeadline(interviewType, deadline) {
+    setSaving(true);
+    setError("");
+    try {
+      const data = await apiFetchJson(`/api/job/deadline?interview_type=${interviewType}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deadline: deadline || null }),
+      });
       setWorkspace(data);
       setActiveJobId(data.job_id || null);
     } catch (err) {
@@ -259,9 +279,6 @@ function App() {
         <Topbar
           title={titleFor(effectiveView)}
           company={workspace?.company}
-          busy={saving}
-          onLoadSamples={() => postAction("/api/resumes/sample")}
-          onClear={() => postAction("/api/resumes", "DELETE")}
         />
 
         {error ? <div className="notice error">{error}</div> : null}
@@ -275,7 +292,8 @@ function App() {
             onStatusFilter={setStatusFilter}
             onQuery={setQuery}
             onCandidate={setSelectedCandidate}
-            onGoToJob={canManageJobs ? openCreateDrive : undefined}
+            onViewDetails={setPreviewCandidate}
+            onGoToJob={canManageJobs ? (activeJobId ? () => openEditDrive(activeJobId) : openCreateDrive) : undefined}
             onGoToUpload={canManageResumes ? () => setActiveView("resumes") : undefined}
             {...driveProps}
           />
@@ -309,6 +327,8 @@ function App() {
             candidates={workspace?.candidates || []}
             onInvite={inviteCandidate}
             onRefresh={refresh}
+            onDeadline={updateDeadline}
+            deadlines={workspace?.deadlines}
             canInvite={canConductInterviews}
             busy={saving}
           />
@@ -323,6 +343,9 @@ function App() {
 
       {selectedCandidate ? (
         <CandidatePanel candidate={selectedCandidate} onClose={() => setSelectedCandidate(null)} />
+      ) : null}
+      {previewCandidate ? (
+        <CandidateResumePreview candidate={previewCandidate} onClose={() => setPreviewCandidate(null)} />
       ) : null}
     </div>
   );

@@ -19,7 +19,7 @@ const FEATURES = [
   {
     icon: Mic,
     title: "Live Voice AI Interviews",
-    desc: "Conduct HR and technical rounds with Gemini Live. Candidate responses are transcribed in real-time and evaluated automatically.",
+    desc: "Conduct HR and technical rounds with live AI. Candidate responses are transcribed in real-time and evaluated automatically.",
     tags: ["Real-Time Speech", "Live Transcription", "Auto-Scorecards"],
   },
   {
@@ -74,7 +74,7 @@ const TAB_PRODUCTS = [
     label: "Live Voice AI",
     icon: Mic,
     title: "Autonomous 2-way voice technical interviews",
-    desc: "Candidates enter a browser-based interview room where Gemini Live conducts adaptive HR and coding rounds. Natural voice feedback, live question follow-ups, and auto-transcription.",
+    desc: "Candidates enter a browser-based interview room where live AI conducts adaptive HR and coding rounds. Natural voice feedback, live question follow-ups, and auto-transcription.",
     bullets: [
       "Integrated audio streaming directly in browser (no download)",
       "Adaptive technical probing based on candidate answers",
@@ -209,7 +209,7 @@ const TESTIMONIALS = [
 const FAQS = [
   {
     q: "How does the live voice AI interview work?",
-    a: "Candidates open a secure browser link with no extra downloads needed. HireAI connects their microphone to a real-time Gemini Live relay that asks structured technical and behavioral questions, reacts naturally to responses, transcribes the conversation, and generates a structured scorecard.",
+    a: "Candidates open a secure browser link with no extra downloads needed. HireAI connects their microphone to a real-time AI interviewer that asks structured technical and behavioral questions, reacts naturally to responses, transcribes the conversation, and generates a structured scorecard.",
   },
   {
     q: "How does AI resume screening evaluate candidates?",
@@ -291,7 +291,7 @@ export function LandingPage() {
               <span />
             </div>
             <div className="mkt-widget-tag">
-              <span className="mkt-live-dot" /> Gemini Live Voice AI
+              <span className="mkt-live-dot" /> Live Voice AI
             </div>
           </div>
 
@@ -475,7 +475,7 @@ export function LandingPage() {
                   </p>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.82rem", color: "var(--mkt-muted)" }}>
-                  <span>Gemini Live Audio Relay</span>
+                  <span>Live AI Audio Relay</span>
                   <span style={{ color: "#34d399", fontWeight: 600 }}>Latency &lt; 280ms</span>
                 </div>
               </div>

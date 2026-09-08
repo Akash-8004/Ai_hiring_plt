@@ -35,7 +35,7 @@ function truncate(text, max) {
   return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
 }
 
-export function CandidateTable({ candidates, onCandidate }) {
+export function CandidateTable({ candidates, onCandidate, onViewDetails }) {
   if (!candidates.length) {
     return (
       <div className="empty-state">
@@ -73,7 +73,7 @@ export function CandidateTable({ candidates, onCandidate }) {
                 <td>
                   <button
                     className="details-button"
-                    onClick={() => onCandidate(candidate)}
+                    onClick={() => onViewDetails(candidate)}
                     title="View resume & parsed details"
                   >
                     <FileText size={15} /> View details
