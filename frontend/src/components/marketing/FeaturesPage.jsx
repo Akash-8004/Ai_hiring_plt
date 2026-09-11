@@ -103,14 +103,14 @@ export function FeaturesPage() {
   return (
     <MarketingLayout>
       {/* ── Page Hero ──────────────────────────────────────────────────── */}
-      <section className="mkt-page-hero" style={{ padding: "4rem 2rem 2rem", textAlign: "center", maxWidth: "800px", margin: "0 auto" }}>
+      <section className="mkt-page-hero">
         <span className="mkt-eyebrow">
           <Sparkles size={13} /> Complete Feature Directory
         </span>
-        <h1 style={{ fontSize: "3.2rem", fontWeight: "800", letterSpacing: "-0.03em", marginBottom: "1rem" }}>
+        <h1>
           Engineered for high-integrity, high-velocity hiring
         </h1>
-        <p className="page-subtitle" style={{ fontSize: "1.15rem", color: "var(--mkt-muted)", lineHeight: "1.7" }}>
+        <p>
           Discover every enterprise capability built into HireAI — from multi-modal AI screening to autonomous voice interviews.
         </p>
       </section>

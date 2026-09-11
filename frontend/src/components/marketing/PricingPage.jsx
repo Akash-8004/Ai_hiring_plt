@@ -103,14 +103,14 @@ export function PricingPage() {
   return (
     <MarketingLayout>
       {/* ── Page Hero ──────────────────────────────────────────────────── */}
-      <section className="mkt-page-hero" style={{ padding: "4rem 2rem 2.5rem", textAlign: "center", maxWidth: "800px", margin: "0 auto" }}>
+      <section className="mkt-page-hero">
         <span className="mkt-eyebrow">
           <Sparkles size={13} /> Transparent Pricing
         </span>
-        <h1 style={{ fontSize: "3.2rem", fontWeight: "800", letterSpacing: "-0.03em", marginBottom: "1rem" }}>
+        <h1>
           Simple plans that scale with your team
         </h1>
-        <p className="page-subtitle" style={{ fontSize: "1.15rem", color: "var(--mkt-muted)", lineHeight: "1.7" }}>
+        <p>
           No hidden fees. Every plan includes AI resume screening, live voice interviewing, and pipeline management.
         </p>
       </section>

@@ -42,7 +42,6 @@ export function MarketingFooter() {
           <Link to="/book-a-demo?solution=hr">For HR Teams</Link>
           <Link to="/book-a-demo?solution=engineering">For Tech Leaders</Link>
           <Link to="/book-a-demo?solution=startup">For Startups</Link>
-          <Link to="/book-a-demo?solution=campus">For Universities</Link>
           <Link to="/pricing">Pricing &amp; Plans</Link>
         </div>
 
@@ -50,16 +49,20 @@ export function MarketingFooter() {
         <div className="mkt-footer-col">
           <h4>Resources</h4>
           <Link to="/book-a-demo">Book a Demo</Link>
-          <Link to="/login">Sign In</Link>
-          <Link to="/features">All Features</Link>
-          <Link to="/pricing">Enterprise Quotas</Link>
           <Link to="/#faq">Platform FAQ</Link>
+          <Link to="/privacy">Privacy Policy</Link>
+          <Link to="/terms">Terms &amp; Conditions</Link>
         </div>
       </div>
 
       <div className="mkt-footer-bottom">
         <div>
-          &copy; {new Date().getFullYear()} HireAI Platform Inc. All rights reserved. Enterprise-grade AI hiring infrastructure.
+          &copy; {new Date().getFullYear()} HireAI Platform Inc - Silveri Consulting Services Pvt Ltd. All rights reserved.
+        </div>
+
+        <div className="mkt-footer-legal">
+          <Link to="/privacy">Privacy Policy</Link>
+          <Link to="/terms">Terms &amp; Conditions</Link>
         </div>
 
         <div className="mkt-footer-social">

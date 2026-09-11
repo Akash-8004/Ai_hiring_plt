@@ -2,9 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   Sparkles, Menu, X, ChevronDown, ArrowRight,
-  FileSearch, Mic, GitBranch, Shield, Users,
-  Building2, Rocket, Landmark, GraduationCap, Briefcase,
-  BookOpen, BarChart3, HelpCircle, LayoutGrid, CheckCircle2,
+  FileSearch, Mic, GitBranch, Shield,
 } from "lucide-react";
 import "./marketing.css";
 
@@ -39,44 +37,6 @@ const PRODUCT_ITEMS = [
     desc: "Tab-switch detection, multi-tenant isolation, and complete audit trails.",
     theme: "blue",
   },
-];
-
-const SOLUTION_ITEMS = [
-  {
-    to: "/book-a-demo?solution=hr",
-    icon: Building2,
-    title: "For HR & Talent Teams",
-    desc: "Eliminate manual screening and run structured candidate assessments.",
-    theme: "blue",
-  },
-  {
-    to: "/book-a-demo?solution=engineering",
-    icon: Rocket,
-    title: "For Tech Leaders & CTOs",
-    desc: "Save engineering bandwidth with AI-driven technical vetting.",
-    theme: "teal",
-  },
-  {
-    to: "/book-a-demo?solution=startup",
-    icon: Briefcase,
-    title: "For Fast-Growing Startups",
-    desc: "Deploy a scalable, high-speed hiring engine with minimal effort.",
-    theme: "purple",
-  },
-  {
-    to: "/book-a-demo?solution=campus",
-    icon: GraduationCap,
-    title: "For University Campus Drives",
-    desc: "Screen thousands of graduate applicants consistently at volume.",
-    theme: "teal",
-  },
-];
-
-const RESOURCE_ITEMS = [
-  { to: "/features", icon: BarChart3, title: "Platform Features", desc: "Detailed breakdown of all platform capabilities" },
-  { to: "/pricing", icon: LayoutGrid, title: "Pricing & Plans", desc: "Transparent starter, growth & enterprise pricing" },
-  { to: "/book-a-demo", icon: HelpCircle, title: "Schedule Live Demo", desc: "Get a personalized 30-min platform walkthrough" },
-  { to: "/#faq", icon: BookOpen, title: "FAQ & Knowledge Base", desc: "Common questions about voice AI and integrations" },
 ];
 
 export function MarketingNav() {
@@ -201,72 +161,12 @@ export function MarketingNav() {
           </div>
         </div>
 
-        {/* Solutions Mega Dropdown */}
-        <div
-          className={`mkt-nav-item ${activeDropdown === "solutions" ? "open" : ""}`}
-          onMouseEnter={() => setActiveDropdown("solutions")}
-          onMouseLeave={() => setActiveDropdown(null)}
-        >
-          <button
-            className="mkt-nav-link"
-            onClick={() => handleDropdownToggle("solutions")}
-            aria-expanded={activeDropdown === "solutions"}
-          >
-            Solutions <ChevronDown size={14} className="chev" />
-          </button>
-          <div className="mkt-mega-dropdown mkt-mega-solutions">
-            {SOLUTION_ITEMS.map((item) => (
-              <button
-                key={item.title}
-                className={`mkt-dropdown-item ${item.theme || ""}`}
-                onClick={() => handleItemClick(item)}
-              >
-                <span className="di-icon"><item.icon size={18} /></span>
-                <span className="di-text">
-                  <strong>{item.title}</strong>
-                  <span>{item.desc}</span>
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-
         <Link
           to="/pricing"
           className={`mkt-nav-link ${isActive("/pricing") ? "active" : ""}`}
         >
           Pricing
         </Link>
-
-        {/* Resources Dropdown */}
-        <div
-          className={`mkt-nav-item ${activeDropdown === "resources" ? "open" : ""}`}
-          onMouseEnter={() => setActiveDropdown("resources")}
-          onMouseLeave={() => setActiveDropdown(null)}
-        >
-          <button
-            className="mkt-nav-link"
-            onClick={() => handleDropdownToggle("resources")}
-            aria-expanded={activeDropdown === "resources"}
-          >
-            Resources <ChevronDown size={14} className="chev" />
-          </button>
-          <div className="mkt-mega-dropdown mkt-mega-resources">
-            {RESOURCE_ITEMS.map((item) => (
-              <button
-                key={item.title}
-                className="mkt-dropdown-item"
-                onClick={() => handleItemClick(item)}
-              >
-                <span className="di-icon"><item.icon size={18} /></span>
-                <span className="di-text">
-                  <strong>{item.title}</strong>
-                  <span>{item.desc}</span>
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
 
         <Link
           to="/book-a-demo"

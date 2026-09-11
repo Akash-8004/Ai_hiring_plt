@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Sparkles, FileSearch, Mic, GitBranch, Users, Shield,
-  Building2, Rocket, Landmark, GraduationCap, Briefcase,
+  Building2, Rocket, Landmark, Briefcase,
   ArrowRight, CheckCircle2, ChevronDown, Star, Play, Check,
   Cpu, Terminal, Layers, Lock, BarChart3, Clock, HelpCircle,
 } from "lucide-react";
@@ -43,7 +43,7 @@ const FEATURES = [
   {
     icon: Sparkles,
     title: "Multi-Tenant SaaS Architecture",
-    desc: "Super Admin, Company Admin, and Staff tiers. Data is strictly isolated by company_id in high-availability MongoDB.",
+    desc: "Admin and Staff tiers. Data is strictly isolated by company_id in high-availability MongoDB.",
     tags: ["Data Isolation", "Usage Credits", "Enterprise SLAs"],
   },
 ];
@@ -175,11 +175,6 @@ const SOLUTIONS = [
     title: "Enterprises",
     desc: "Multi-tenant access control, customized credit quotas, permission management, and comprehensive audit logs.",
   },
-  {
-    icon: GraduationCap,
-    title: "University Drives",
-    desc: "Screen thousands of campus applicants simultaneously with standardized, repeatable AI scoring.",
-  },
 ];
 
 const TESTIMONIALS = [
@@ -209,7 +204,7 @@ const TESTIMONIALS = [
 const FAQS = [
   {
     q: "How does the live voice AI interview work?",
-    a: "Candidates open a secure browser link with no extra downloads needed. HireAI connects their microphone to a real-time AI interviewer that asks structured technical and behavioral questions, reacts naturally to responses, transcribes the conversation, and generates a structured scorecard.",
+    a: "Candidates open a secure browser link with no extra downloads needed. HireAI connects their microphone and camera to a real-time AI interviewer that asks structured technical and behavioral questions, reacts naturally to responses, records and transcribes the session, and generates a structured scorecard.",
   },
   {
     q: "How does AI resume screening evaluate candidates?",

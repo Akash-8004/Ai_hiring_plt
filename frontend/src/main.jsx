@@ -24,6 +24,8 @@ import { LandingPage } from "./components/marketing/LandingPage";
 import { FeaturesPage } from "./components/marketing/FeaturesPage";
 import { PricingPage } from "./components/marketing/PricingPage";
 import { BookDemoPage } from "./components/marketing/BookDemoPage";
+import { PrivacyPolicyPage } from "./components/marketing/PrivacyPolicyPage";
+import { TermsPage } from "./components/marketing/TermsPage";
 import { useAuth } from "./hooks/useAuth";
 import { apiFetchJson } from "./utils/api";
 
@@ -403,6 +405,8 @@ function AppRouter() {
       <Route path="/features" element={<FeaturesPage />} />
       <Route path="/pricing" element={<PricingPage />} />
       <Route path="/book-a-demo" element={<BookDemoPage />} />
+      <Route path="/privacy" element={<PrivacyPolicyPage />} />
+      <Route path="/terms" element={<TermsPage />} />
       <Route path="/contact" element={<Navigate to="/book-a-demo" replace />} />
       <Route path="/login" element={<LoginRoute />} />
       <Route path="/app/*" element={<ProtectedApp />} />
