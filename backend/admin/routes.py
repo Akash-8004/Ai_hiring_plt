@@ -9,7 +9,6 @@ Company Admin endpoints (/api/company/*):
 """
 
 from datetime import datetime, timezone
-import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
@@ -33,6 +32,7 @@ from backend.auth.security import (
     require_permission,
     require_super_admin,
 )
+from backend.config import frontend_base_url
 from backend.storage import database
 from backend.services import email_service
 from backend.services.email_templates import credential_delivery_email
@@ -679,7 +679,7 @@ def send_company_credentials(
     if not target_user:
         raise HTTPException(status_code=404, detail="Admin user not found")
 
-    portal_url = f"{os.getenv('APP_URL', 'http://localhost:5173')}/login"
+    portal_url = f"{frontend_base_url()}/login"
     subject, html_body, plain_body = credential_delivery_email(
         company["name"], body.admin_email, body.admin_password, portal_url,
     )

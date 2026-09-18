@@ -22,3 +22,16 @@ def load_env() -> None:
 
 
 load_env()
+
+
+def frontend_base_url() -> str:
+    """Public origin of the React frontend.
+
+    Prefer the production origin `FRONTEND_URL`; fall back to the legacy
+    `APP_URL` for backwards compatibility, then to the local dev default.
+    """
+    return (
+        os.getenv("FRONTEND_URL")
+        or os.getenv("APP_URL")
+        or "http://localhost:5173"
+    ).rstrip("/")

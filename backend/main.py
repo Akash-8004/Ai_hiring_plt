@@ -4,6 +4,7 @@ import base64
 import json
 import math
 import os
+import re
 import secrets
 import time
 from dataclasses import asdict
@@ -20,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from backend.core.models import JobDescription, ParsedResume
 from backend.core.sample_data import DEFAULT_JOB
+from backend.config import frontend_base_url
 from backend.live.relay import GeminiLiveRelay
 from backend.services.ai_ranker import AIRankingService
 from backend.services.HR_Round.hr_evaluator import HREvaluator
@@ -536,6 +538,27 @@ async def upload_resumes(
 
 # ── Invitation ──────────────────────────────────────────────────────────────
 
+def _build_interview_link(token: str, interview_type: str) -> str:
+    """Public interview URL using the configured frontend origin."""
+    return f"{frontend_base_url()}/?interview={token}&type={interview_type}"
+
+
+def _normalise_invitation(invitation: dict | None) -> dict | None:
+    """Repair invitation links previously stored with a localhost origin."""
+    if not isinstance(invitation, dict):
+        return invitation
+    link = invitation.get("link")
+    if (
+        isinstance(link, str)
+        and re.match(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?", link) is not None
+    ):
+        invitation = dict(invitation)
+        invitation["link"] = _build_interview_link(
+            invitation.get("token", ""), invitation.get("type", "technical")
+        )
+    return invitation
+
+
 @app.put("/api/job/deadline")
 def update_round_deadline(
     interview_type: str,
@@ -592,7 +615,7 @@ def invite_candidate(
         invitation = {
             "token": token,
             "type": interview_type,
-            "link": f"http://127.0.0.1:5173/?interview={token}&type={interview_type}",
+            "link": _build_interview_link(token, interview_type),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "expires_at": deadline,
         }
@@ -622,8 +645,7 @@ def invite_candidate(
         else:
             try:
                 candidate_name = candidate_doc.get("full_name", email)
-                app_url = os.getenv("APP_URL", "http://localhost:5173")
-                email_link = f"{app_url}/?interview={token}&type={interview_type}"
+                email_link = _build_interview_link(token, interview_type)
                 subject, html_body, plain_body = interview_invite_email(
                     candidate_name, interview_type, email_link, deadline=invitation.get("expires_at"),
                 )
@@ -1191,8 +1213,8 @@ def _workspace_payload(
             result.candidate.email, company_id, effective_job_id
         ) or {}
         row["pipelineStage"] = doc.get("pipelineStage", "uploaded")
-        row["invitation"] = doc.get("invitation")
-        row["hr_invitation"] = doc.get("hr_invitation")
+        row["invitation"] = _normalise_invitation(doc.get("invitation"))
+        row["hr_invitation"] = _normalise_invitation(doc.get("hr_invitation"))
         row["interview"] = doc.get("interview")
         row["technical_interview"] = doc.get("technical_interview")
         row["hr_interview"] = doc.get("hr_interview")

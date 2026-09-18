@@ -37,6 +37,8 @@ services:
         sync: false
       - key: SMTP_FROM_NAME
         value: AI Hiring Platform
+      - key: FRONTEND_URL
+        value: https://interviewai-zjoo.onrender.com
       - key: EMAIL_PROVIDER
         value: smtp
       - key: SENDGRID_API_KEY
