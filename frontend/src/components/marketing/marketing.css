@@ -1660,6 +1660,59 @@
   resize: vertical;
 }
 
+.mkt-captcha {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 0.8rem;
+  background: rgba(8, 12, 22, 0.7);
+  border: 1px solid var(--mkt-border-strong);
+  border-radius: 10px;
+}
+
+.mkt-captcha-question {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  white-space: nowrap;
+}
+
+.mkt-captcha input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0.7rem;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid var(--mkt-border-strong);
+  border-radius: 8px;
+  color: #ffffff;
+  font-size: 0.9rem;
+}
+
+.mkt-captcha input:focus {
+  outline: none;
+  border-color: var(--mkt-primary);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+}
+
+.mkt-captcha-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0.45rem;
+  background: rgba(59, 130, 246, 0.15);
+  border: 1px solid var(--mkt-border-strong);
+  border-radius: 8px;
+  color: #93c5fd;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mkt-captcha-refresh:hover {
+  background: rgba(59, 130, 246, 0.3);
+  color: #ffffff;
+}
+
 .mkt-form-error {
   padding: 0.85rem 1.15rem;
   background: rgba(239, 68, 68, 0.12);
@@ -1960,6 +2013,14 @@
 
   .mkt-hero-widget {
     padding: 1.1rem;
+  }
+
+  .mkt-captcha {
+    flex-wrap: wrap;
+  }
+
+  .mkt-captcha-question {
+    white-space: normal;
   }
 
   .mkt-voice-live-card {

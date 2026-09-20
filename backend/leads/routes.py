@@ -1,26 +1,68 @@
+import hashlib
 import re
+import secrets
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from backend.auth.security import log_activity, require_super_admin
+from backend.auth.security import check_lead_rate_limit, log_activity, require_super_admin
+from backend.services import email_service
+from backend.services.email_templates import demo_confirmation_email
 from backend.storage import database
 
 router = APIRouter(tags=["leads"])
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# ── Anti-abuse: lightweight server-side math CAPTCHA (no external service) ──
+_CAPTCHA_TTL_SECONDS = 600.0
+_captcha_challenges: dict[str, dict] = {}
+
+
+def _cleanup_captchas() -> None:
+    now = time.time()
+    for token, challenge in list(_captcha_challenges.items()):
+        if challenge["exp"] < now:
+            _captcha_challenges.pop(token, None)
+
+
+@router.get("/api/public/captcha")
+def new_captcha() -> dict:
+    a = secrets.randbelow(9) + 1
+    b = secrets.randbelow(9) + 1
+    token = secrets.token_urlsafe(16)
+    _captcha_challenges[token] = {
+        "answer_hash": hashlib.sha256(str(a + b).encode("utf-8")).hexdigest(),
+        "exp": time.time() + _CAPTCHA_TTL_SECONDS,
+    }
+    _cleanup_captchas()
+    return {"token": token, "question": f"{a} + {b} = ?"}
+
+
+def _validate_captcha(token: str, answer: str) -> tuple[bool, str]:
+    """Consume and validate a CAPTCHA challenge. Challenges are single-use."""
+    challenge = _captcha_challenges.pop(token.strip(), None)
+    if not challenge or challenge["exp"] < time.time():
+        return False, "Security check expired. Please refresh and try again."
+    expected = hashlib.sha256(answer.strip().encode("utf-8")).hexdigest()
+    if not secrets.compare_digest(expected, challenge["answer_hash"]):
+        return False, "Incorrect security check. Please try again."
+    return True, ""
+
 
 class LeadCreateRequest(BaseModel):
     company_name: str = Field(min_length=1, max_length=200)
-    industry: str = ""
+    industry: str = Field(default="", max_length=100)
     contact_name: str = Field(min_length=1, max_length=120)
-    work_email: str
-    phone: str = ""
-    team_size: str = ""
-    hiring_volume: str = ""
-    message: str = ""
+    work_email: str = Field(max_length=254)
+    phone: str = Field(default="", max_length=30)
+    team_size: str = Field(default="", max_length=50)
+    hiring_volume: str = Field(default="", max_length=50)
+    message: str = Field(default="", max_length=5000)
+    captcha_token: str = Field(default="", max_length=128)
+    captcha_answer: str = Field(default="", max_length=10)
 
 
 class LeadUpdateRequest(BaseModel):
@@ -43,6 +85,13 @@ def _serialize_lead(doc: dict) -> dict:
 
 @router.post("/api/public/leads")
 def create_lead(payload: LeadCreateRequest, request: Request) -> dict:
+    ip = request.client.host if request.client else "unknown"
+    check_lead_rate_limit(ip)
+
+    ok, captcha_error = _validate_captcha(payload.captcha_token, payload.captcha_answer)
+    if not ok:
+        raise HTTPException(status_code=400, detail=captcha_error)
+
     email = payload.work_email.strip().lower()
     if not EMAIL_RE.match(email):
         raise HTTPException(status_code=400, detail="Invalid email address")
@@ -72,7 +121,35 @@ def create_lead(payload: LeadCreateRequest, request: Request) -> dict:
         metadata={"contact_name": payload.contact_name.strip()},
         request=request,
     )
-    return {"ok": True, "lead_id": lead_id}
+
+    # ── Send a confirmation email (best-effort; never block lead creation) ──
+    email_sent = False
+    try:
+        subject, html_body, plain_body = demo_confirmation_email(
+            contact_name=payload.contact_name.strip(),
+            company_name=payload.company_name.strip(),
+            work_email=email,
+            team_size=payload.team_size.strip(),
+            hiring_volume=payload.hiring_volume.strip(),
+            message=payload.message,
+        )
+        result = email_service.send_email(email, subject, html_body, plain_body)
+        email_sent = result.get("ok", False)
+        email_service.log_email_send(
+            to_email=email,
+            subject=subject,
+            email_type="demo_confirmation",
+            status="sent" if email_sent else "failed",
+            error_message=result.get("error"),
+            metadata={
+                "company_name": payload.company_name.strip(),
+                "lead_id": lead_id,
+            },
+        )
+    except Exception:
+        pass
+
+    return {"ok": True, "lead_id": lead_id, "email_sent": email_sent}
 
 
 @router.get("/api/public/plans")

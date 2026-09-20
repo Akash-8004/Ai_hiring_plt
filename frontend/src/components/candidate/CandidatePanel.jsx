@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { XCircle, Video, Play, X } from "lucide-react";
 import { StatusBadge } from "../common/StatusBadge";
 import { CopyButton } from "../common/CopyButton";
+import { pipelineStatus } from "../../utils/pipelineStatus";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
@@ -10,6 +11,10 @@ export function CandidatePanel({ candidate, onClose }) {
   const hrInterview = candidate.hr_interview || {};
   const invitation = candidate.invitation;
   const techInterview = candidate.technical_interview || {};
+
+  // The badge reflects the candidate's current pipeline stage (latest round
+  // result), matching the row status in the dashboard table.
+  const stage = pipelineStatus(candidate);
 
   const [videoModal, setVideoModal] = useState(null); // { email, type, label }
   const [videoUrl, setVideoUrl] = useState(null);
@@ -53,7 +58,7 @@ export function CandidatePanel({ candidate, onClose }) {
           <span>{candidate.Email}</span>
         </div>
       </div>
-      <StatusBadge status={candidate.Status} />
+      <StatusBadge status={candidate.Status} cls={stage.cls} label={stage.label} />
       <div className="panel-score">
         <strong>{candidate.Score}%</strong>
         <span>AI resume score</span>

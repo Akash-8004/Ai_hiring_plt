@@ -124,3 +124,191 @@ def credential_delivery_email(
 </html>"""
 
     return subject, html_body, plain_body
+
+
+def credits_adjusted_email(
+    company_name: str,
+    admin_email: str,
+    delta: int,
+    new_allowance: int,
+    new_remaining: int,
+    portal_url: str,
+) -> tuple[str, str, str]:
+    """Build a notification email for a super-admin credit adjustment.
+
+    Sent to the company admin whenever a super admin adds or removes credits.
+    """
+    action_label = "added to" if delta > 0 else "removed from"
+    change = f"+{delta:,}" if delta > 0 else f"{delta:,}"
+    subject = f"AI Hiring Platform — Credits {('Added' if delta > 0 else 'Removed')}"
+
+    plain_body = (
+        f"Hello,\n\n"
+        f"This is to inform you that your credit balance for \"{company_name}\" "
+        f"has been updated by the platform administrator.\n\n"
+        f"Credits {action_label} your account : {change}\n"
+        f"Current Allowance                : {new_allowance:,}\n"
+        f"Remaining Balance                : {new_remaining:,}\n\n"
+        f"You can log in to review your usage: {portal_url}\n\n"
+        f"— AI Hiring Platform"
+    )
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; line-height: 1.6; max-width: 560px; margin: 0 auto; padding: 24px;">
+  <h2 style="margin-top: 0; color: #0f172a;">Credits {('Added' if delta > 0 else 'Removed')}</h2>
+  <p>Your credit balance for <strong>{company_name}</strong> has been updated by the platform administrator.</p>
+  <table style="border-collapse: collapse; width: 100%; margin: 16px 0; background: #f8fafc; border-radius: 8px;">
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Credits {action_label} your account</td><td style="padding: 10px 16px; font-family: monospace;">{change}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Current Allowance</td><td style="padding: 10px 16px; font-family: monospace;">{new_allowance:,}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Remaining Balance</td><td style="padding: 10px 16px; font-family: monospace;">{new_remaining:,}</td></tr>
+  </table>
+  <p style="margin: 20px 0;">
+    <a href="{portal_url}" style="display: inline-block; padding: 10px 24px; background: #6366f1; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Go to Login Portal</a>
+  </p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+  <p style="font-size: 12px; color: #94a3b8;">This is an automated notification from the AI Hiring Platform.</p>
+</body>
+</html>"""
+
+    return subject, html_body, plain_body
+
+
+def company_details_email(
+    company_name: str,
+    admin_email: str,
+    plan: str,
+    allowance: int,
+    used: int,
+    remaining: int,
+    portal_url: str,
+) -> tuple[str, str, str]:
+    """Build an account summary email for a company admin.
+
+    Sent on request from the super admin (e.g., to remind an admin of their
+    account details).
+    """
+    subject = f"Your AI Hiring Platform Account Summary — {company_name}"
+
+    plain_body = (
+        f"Hello,\n\n"
+        f"Here is a summary of your AI Hiring Platform account for "
+        f"\"{company_name}\":\n\n"
+        f"Company      : {company_name}\n"
+        f"Admin Email  : {admin_email}\n"
+        f"Plan         : {plan.title()}\n"
+        f"Credit Allowance : {allowance:,}\n"
+        f"Credits Used      : {used:,}\n"
+        f"Credits Remaining : {remaining:,}\n\n"
+        f"Login Portal : {portal_url}\n\n"
+        f"— AI Hiring Platform"
+    )
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; line-height: 1.6; max-width: 560px; margin: 0 auto; padding: 24px;">
+  <h2 style="margin-top: 0; color: #0f172a;">Your AI Hiring Platform Account Summary</h2>
+  <p>Here is a summary of your account for <strong>{company_name}</strong>:</p>
+  <table style="border-collapse: collapse; width: 100%; margin: 16px 0; background: #f8fafc; border-radius: 8px;">
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Company</td><td style="padding: 10px 16px;">{company_name}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Admin Email</td><td style="padding: 10px 16px; font-family: monospace;">{admin_email}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Plan</td><td style="padding: 10px 16px;">{plan.title()}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Credit Allowance</td><td style="padding: 10px 16px; font-family: monospace;">{allowance:,}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Credits Used</td><td style="padding: 10px 16px; font-family: monospace;">{used:,}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Credits Remaining</td><td style="padding: 10px 16px; font-family: monospace;">{remaining:,}</td></tr>
+  </table>
+  <p style="margin: 20px 0;">
+    <a href="{portal_url}" style="display: inline-block; padding: 10px 24px; background: #6366f1; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Go to Login Portal</a>
+  </p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+  <p style="font-size: 12px; color: #94a3b8;">This is an automated notification from the AI Hiring Platform.</p>
+</body>
+</html>"""
+
+    return subject, html_body, plain_body
+
+
+def demo_confirmation_email(
+    contact_name: str,
+    company_name: str,
+    work_email: str,
+    team_size: str = "",
+    hiring_volume: str = "",
+    message: str = "",
+) -> tuple[str, str, str]:
+    """Build a confirmation email for a public 'Book a demo' request.
+
+    Sent to the requester only; the sales team sees the lead in the admin
+    leads section.
+    """
+    subject = "We've received your demo request — AI Hiring Platform"
+
+    details_lines = [
+        ("Company", company_name),
+        ("Contact Name", contact_name),
+        ("Work Email", work_email),
+    ]
+    if team_size:
+        details_lines.append(("Team Size", team_size))
+    if hiring_volume:
+        details_lines.append(("Hiring Volume", hiring_volume))
+
+    plain_rows = "\n".join(
+        f"{'%-14s'} : {value}" % label for label, value in details_lines
+    )
+    plain_summary = (
+        f"\nHere is a summary of your request:\n\n{plain_rows}\n"
+    ) if details_lines else ""
+    plain_message = (
+        f"\nYour message:\n{message.strip()}\n" if message.strip() else ""
+    )
+
+    html_rows = "".join(
+        f'<tr><td style="padding: 10px 16px; font-weight: 600; color: #475569; white-space: nowrap;">{label}</td>'
+        f'<td style="padding: 10px 16px;">{value}</td></tr>'
+        for label, value in details_lines
+    )
+    html_summary = (
+        '<p style="margin: 16px 0;">Here is a summary of your request:</p>'
+        '<table style="border-collapse: collapse; width: 100%; margin: 12px 0 20px; background: #f8fafc; border-radius: 8px;">'
+        f'{html_rows}</table>'
+    ) if details_lines else ""
+    html_message = (
+        f'<p style="margin: 16px 0;"><strong>Your message:</strong><br />{message.strip()}</p>'
+        if message.strip()
+        else ""
+    )
+
+    plain_body = (
+        f"Dear {contact_name},\n\n"
+        f"Thank you for requesting a live demo of the AI Hiring Platform "
+        f"for {company_name}.\n\n"
+        f"Our hiring technology specialists have received your details and "
+        f"will reach out to schedule your personalized session.\n"
+        f"{plain_summary}"
+        f"{plain_message}"
+        f"\nWe look forward to speaking with you!\n\n"
+        f"— AI Hiring Platform"
+    )
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; line-height: 1.6; max-width: 560px; margin: 0 auto; padding: 24px;">
+  <h2 style="margin-top: 0; color: #0f172a;">We've received your demo request</h2>
+  <p>Dear {contact_name},</p>
+  <p>Thank you for requesting a live demo of the <strong>AI Hiring Platform</strong> for <strong>{company_name}</strong>.</p>
+  <p>Our hiring technology specialists have received your details and will reach out to schedule your personalized session.</p>
+  {html_summary}
+  {html_message}
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+  <p style="font-size: 12px; color: #94a3b8;">We look forward to speaking with you!</p>
+</body>
+</html>"""
+
+    return subject, html_body, plain_body

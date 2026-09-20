@@ -39,7 +39,44 @@ KNOWN_SKILLS = {
 }
 
 
+# Minimum number of non-whitespace characters to consider extracted text
+# meaningful. Scanned/image-only PDFs and corrupt DOCX files typically
+# produce empty or near-empty text that cannot be parsed.
+_MIN_TEXT_LENGTH = 30
+
+
+def _is_text_empty(text: str) -> bool:
+    """Return True when extracted text is blank or trivially short."""
+    stripped = (text or "").strip()
+    # Also catch the old DOCX placeholder that should no longer appear
+    if stripped.startswith("DOCX parsing placeholder") or stripped.startswith("PDF parsing placeholder"):
+        return True
+    # Count only non-whitespace characters
+    return sum(1 for ch in stripped if not ch.isspace()) < _MIN_TEXT_LENGTH
+
+
+def _empty_resume(file_name: str, text: str) -> ParsedResume:
+    """Return a placeholder ParsedResume flagged as having no extractable text."""
+    name = Path(file_name).stem.replace("_", " ").replace("-", " ").title()
+    return ParsedResume(
+        file_name=file_name,
+        full_name=name,
+        email="not-found@example.com",
+        phone="Not found",
+        skills=[],
+        experience_years=0,
+        education="Not found",
+        raw_text="[NO_TEXT_EXTRACTED] The uploaded file contained no readable text. "
+                 "This usually means the PDF is a scanned image without an embedded "
+                 "text layer, or the DOCX file is corrupted. Please re-upload a "
+                 "text-based PDF, DOCX, or TXT file.",
+        parsing_provider="none",
+    )
+
+
 def parse_resume_text(file_name: str, text: str) -> ParsedResume:
+    if _is_text_empty(text):
+        return _empty_resume(file_name, text)
     normalized = " ".join(text.split())
     lower_text = normalized.lower()
 
@@ -69,6 +106,8 @@ def parse_resume_text(file_name: str, text: str) -> ParsedResume:
 
 
 def parse_resume_text_with_ai(file_name: str, text: str) -> ParsedResume:
+    if _is_text_empty(text):
+        return _empty_resume(file_name, text)
     load_env()
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -110,6 +149,9 @@ def parse_uploaded_resume_with_ai(uploaded_file: BinaryIO) -> ParsedResume:
         text = _read_pdf(uploaded_file)
     else:
         text = uploaded_file.read().decode("utf-8", errors="ignore")
+    # Early-exit: flag the candidate instead of sending blank text to the AI
+    if _is_text_empty(text):
+        return _empty_resume(file_name, text)
     return parse_resume_text_with_ai(file_name, text)
 
 
@@ -281,7 +323,7 @@ def _read_docx(uploaded_file: BinaryIO) -> str:
         document = Document(uploaded_file)
         return "\n".join(paragraph.text for paragraph in document.paragraphs)
     except Exception:
-        return "DOCX parsing placeholder. Install python-docx for real document extraction."
+        return ""
 
 
 def _read_pdf(uploaded_file: BinaryIO) -> str:
@@ -291,7 +333,7 @@ def _read_pdf(uploaded_file: BinaryIO) -> str:
         reader = PdfReader(uploaded_file)
         return "\n".join(page.extract_text() or "" for page in reader.pages)
     except Exception:
-        return "PDF parsing placeholder. Install pypdf or pdfplumber for real PDF extraction."
+        return ""
 
 
 def _extract_name(text: str, file_name: str) -> str:

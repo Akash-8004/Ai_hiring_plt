@@ -35,7 +35,11 @@ from backend.auth.security import (
 from backend.config import frontend_base_url
 from backend.storage import database
 from backend.services import email_service
-from backend.services.email_templates import credential_delivery_email
+from backend.services.email_templates import (
+    company_details_email,
+    credential_delivery_email,
+    credits_adjusted_email,
+)
 
 admin_router = APIRouter(prefix="/api/admin", tags=["admin"])
 company_router = APIRouter(prefix="/api/company", tags=["company"])
@@ -55,11 +59,7 @@ def platform_stats(user: dict = Depends(require_super_admin)):
 @admin_router.get("/companies")
 def list_companies(user: dict = Depends(require_super_admin)):
     """List all companies with user counts."""
-    companies = database.list_companies()
-    for c in companies:
-        c["_id"] = str(c["_id"])
-        c["current_users"] = database.count_company_users(str(c["_id"]))
-        c["credits"] = database.get_company_credits(str(c["_id"]))
+    companies = database.list_companies_with_counts()
     return {"companies": companies}
 
 
@@ -122,12 +122,42 @@ def create_company(body: CreateCompanyRequest, user: dict = Depends(require_supe
         request=request,
     )
 
+    # ── BUG 23: Auto-email credentials on creation ──────────────────────
+    email_auto_sent = False
+    email_auto_error = None
+    if body.auto_send_email:
+        try:
+            portal_url = f"{frontend_base_url()}/login"
+            subject, html_body, plain_body = credential_delivery_email(
+                body.company_name, body.admin_email, body.admin_password, portal_url,
+            )
+            result = email_service.send_email(body.admin_email, subject, html_body, plain_body)
+            email_auto_sent = result.get("ok", False)
+            email_auto_error = result.get("error")
+            email_service.log_email_send(
+                to_email=body.admin_email,
+                subject=subject,
+                email_type="credential_delivery",
+                status="sent" if email_auto_sent else "failed",
+                error_message=email_auto_error,
+                metadata={"company_id": str(company_id), "company_name": body.company_name, "auto": True},
+                sent_by=user.get("email", "system"),
+            )
+        except Exception as exc:
+            email_auto_error = str(exc)
+
     return {
         "ok": True,
         "company_id": str(company_id),
         "company_name": body.company_name,
         "admin_email": body.admin_email,
-        "message": f"Company created. Share credentials with {body.admin_email}",
+        "email_auto_sent": email_auto_sent,
+        "email_auto_error": email_auto_error,
+        "message": (
+            f"Company created. Credentials emailed to {body.admin_email}."
+            if email_auto_sent
+            else f"Company created. Share credentials with {body.admin_email}"
+        ),
     }
 
 
@@ -347,6 +377,36 @@ def restore_company(
     return {"ok": True, "restored": True, "detail": result}
 
 
+@admin_router.post("/companies/{company_id}/permanent-delete")
+def permanent_delete_company(
+    company_id: str,
+    user: dict = Depends(require_super_admin),
+    request: Request = None,
+):
+    """Permanently delete an archived company and ALL its data. Irreversible."""
+    company = database.get_company_by_id(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if company.get("status") != "archived":
+        raise HTTPException(
+            status_code=400,
+            detail="Company must be archived before it can be permanently deleted. Archive it first.",
+        )
+    result = database.permanent_delete_company(company_id)
+    log_activity(
+        action="company.permanently_deleted",
+        category="user_mgmt",
+        actor=user,
+        target_type="company",
+        target_id=company_id,
+        target_label=company["name"],
+        metadata=result,
+        severity="critical",
+        request=request,
+    )
+    return {"ok": True, "permanently_deleted": True, "detail": result}
+
+
 @admin_router.get("/companies/{company_id}/activity")
 def company_activity(
     company_id: str,
@@ -487,7 +547,7 @@ def reset_user_password(
         request=request,
     )
 
-    return {"ok": True, "new_password": body.new_password}
+    return {"ok": True}
 
 
 @admin_router.put("/users/{user_id}")
@@ -572,6 +632,35 @@ def admin_adjust_credits(
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
     bucket = database.adjust_company_credits(company_id, body.delta)
+
+    admin_user = _find_company_admin(company_id, company)
+    portal_url = f"{frontend_base_url()}/login"
+    email_result = {"ok": None, "message": "No recipient found"}
+    if admin_user:
+        subject, html_body, plain_body = credits_adjusted_email(
+            company["name"],
+            admin_user["email"],
+            body.delta,
+            bucket.get("allowance", 0),
+            bucket.get("remaining", 0),
+            portal_url,
+        )
+        result = email_service.send_email(admin_user["email"], subject, html_body, plain_body)
+        email_ok = result.get("ok", False)
+        email_result = {
+            "ok": email_ok,
+            "message": "Notification email sent" if email_ok else f"Email failed: {result.get('error', '')}",
+        }
+        email_service.log_email_send(
+            to_email=admin_user["email"],
+            subject=subject,
+            email_type="credits_adjusted",
+            status="sent" if email_ok else "failed",
+            error_message=result.get("error"),
+            metadata={"company_id": company_id, "company_name": company["name"], "delta": body.delta},
+            sent_by=user.get("email", "system"),
+        )
+
     database.log_usage(
         "", company_id,
         minutes=abs(body.delta),
@@ -591,7 +680,7 @@ def admin_adjust_credits(
         severity="warning",
         request=request,
     )
-    return {"ok": True, "credits": bucket}
+    return {"ok": True, "credits": bucket, "email": email_result}
 
 
 @admin_router.get("/plans/pricing")
@@ -679,6 +768,16 @@ def send_company_credentials(
     if not target_user:
         raise HTTPException(status_code=404, detail="Admin user not found")
 
+    # ── BUG 21: Server-side dedup — skip if sent in last 60 seconds ─────
+    recent = database.find_recent_email_log(
+        to_email=body.admin_email,
+        email_type="credential_delivery",
+        company_id=company_id,
+        seconds=60,
+    )
+    if recent:
+        return {"ok": True, "message": "Credentials already sent recently"}
+
     portal_url = f"{frontend_base_url()}/login"
     subject, html_body, plain_body = credential_delivery_email(
         company["name"], body.admin_email, body.admin_password, portal_url,
@@ -701,6 +800,77 @@ def send_company_credentials(
     if not email_ok:
         return {"ok": False, "message": f"Email failed: {email_error}"}
     return {"ok": True, "message": "Credentials sent successfully"}
+
+
+def _find_company_admin(company_id: str, company: dict) -> dict | None:
+    """Resolve the company_admin user record for a company.
+
+    Falls back to a synthetic record built from the company's ``admin_email``.
+    """
+    for user in database.list_users_by_company(company_id):
+        if user.get("role") == "company_admin":
+            return user
+    fallback_email = company.get("admin_email") or company.get("contact_email")
+    if fallback_email:
+        return {"email": fallback_email}
+    return None
+
+
+@admin_router.post("/companies/{company_id}/send-company-details")
+def send_company_details(
+    company_id: str,
+    user: dict = Depends(require_super_admin),
+    request: Request = None,
+):
+    """Email the company admin an account summary (plan + credit usage)."""
+    company = database.get_company_by_id(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    admin_user = _find_company_admin(company_id, company)
+    if not admin_user:
+        return {"ok": False, "message": "No company admin found"}
+
+    bucket = database.get_company_credits(company_id)
+    plan = company.get("plan", "starter")
+    portal_url = f"{frontend_base_url()}/login"
+    subject, html_body, plain_body = company_details_email(
+        company["name"],
+        admin_user["email"],
+        plan,
+        bucket.get("allowance", 0),
+        bucket.get("used", 0),
+        bucket.get("remaining", 0),
+        portal_url,
+    )
+
+    result = email_service.send_email(admin_user["email"], subject, html_body, plain_body)
+    email_ok = result.get("ok", False)
+    email_error = result.get("error")
+
+    email_service.log_email_send(
+        to_email=admin_user["email"],
+        subject=subject,
+        email_type="company_details",
+        status="sent" if email_ok else "failed",
+        error_message=email_error,
+        metadata={"company_id": company_id, "company_name": company["name"], "plan": plan},
+        sent_by=user.get("email", "system"),
+    )
+    log_activity(
+        action="company.details_email_sent",
+        category="email",
+        actor=user,
+        target_type="company",
+        target_id=company_id,
+        target_label=company["name"],
+        metadata={"to": admin_user["email"]},
+        request=request,
+    )
+
+    if not email_ok:
+        return {"ok": False, "message": f"Email failed: {email_error}"}
+    return {"ok": True, "message": "Company details sent successfully"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

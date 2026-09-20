@@ -4,8 +4,11 @@ All tenant-scoped functions accept a `company_id` parameter to enforce data
 isolation between companies.
 """
 
-import os
+from dataclasses import asdict
 from datetime import datetime, timezone
+import os
+import re
+from typing import Any
 from uuid import uuid4
 
 from bson import ObjectId
@@ -60,6 +63,12 @@ try:
     _email_logs.create_index([("to_email", 1), ("sent_at", DESCENDING)])
     _email_logs.create_index([("status", 1)])
     _jd_requests.create_index([("company_id", 1), ("job_id", 1)], unique=True)
+    # BUG 24: indexes for faster stats and list_companies queries
+    _candidates.create_index("technical_interview.status")
+    _candidates.create_index("hr_interview.status")
+    _companies.create_index([("created_at", DESCENDING)])
+    _companies.create_index("status")
+    _users.create_index("company_id")
 except Exception:
     pass
 
@@ -69,7 +78,39 @@ except Exception:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def get_user_by_email(email: str) -> dict | None:
-    return _users.find_one({"email": email})
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    user = _users.find_one({"email": email})
+    if user:
+        return user
+    # Fallback for any legacy rows still stored with mixed case.
+    return _users.find_one({"email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}})
+
+
+def normalize_user_emails() -> dict:
+    """Lowercase every stored user email so login and duplicate checks are case-insensitive.
+
+    Case-variant collisions (e.g. both john@x.com and John@x.com already exist) are
+    left untouched so nobody gets locked out — the case-insensitive fallback in
+    get_user_by_email still resolves them. Skipped emails are reported in the result.
+    """
+    normalized = 0
+    skipped_duplicates: list[str] = []
+    try:
+        raw_emails = [u.get("email") or "" for u in _users.find({}, {"email": 1})]
+    except Exception:
+        return {"normalized": 0, "skipped_duplicates": []}
+    for raw in raw_emails:
+        lowered = raw.strip().lower()
+        if not lowered or lowered == raw:
+            continue
+        if _users.find_one({"email": lowered}):
+            skipped_duplicates.append(lowered)
+            continue
+        _users.update_one({"email": raw}, {"$set": {"email": lowered}})
+        normalized += 1
+    return {"normalized": normalized, "skipped_duplicates": skipped_duplicates}
 
 
 def get_user_by_id(user_id: str) -> dict | None:
@@ -104,6 +145,18 @@ def update_user_session(
             {"_id": ObjectId(user_id)},
             {"$set": {"active_session_token": refresh_token}},
         )
+
+
+def rotate_session_token(user_id: str, old_token: str, new_token: str) -> bool:
+    """Atomically swap the active session token only if it still matches
+    ``old_token``. Returns True if the rotation succeeded, False if the session
+    was already replaced (stolen-token replay race or concurrent refresh).
+    """
+    result = _users.update_one(
+        {"_id": ObjectId(user_id), "active_session_token": old_token},
+        {"$set": {"active_session_token": new_token}},
+    )
+    return result.modified_count == 1
 
 
 def update_user_password(user_id: str, password_hash: str) -> None:
@@ -196,6 +249,35 @@ def list_archived_companies() -> list[dict]:
     return list(_companies.find({"status": "archived"}).sort("deleted_at", DESCENDING))
 
 
+def list_companies_with_counts() -> list[dict]:
+    """List non-archived companies with user counts in a single aggregation (BUG 24 N+1 fix)."""
+    pipeline = [
+        {"$match": {"status": {"$ne": "archived"}}},
+        {"$sort": {"created_at": DESCENDING}},
+        {"$lookup": {
+            "from": "users",
+            "localField": "_id",
+            "foreignField": "company_id",
+            "as": "_users_lookup",
+        }},
+        {"$addFields": {
+            "current_users": {"$size": "$_users_lookup"},
+        }},
+        {"$project": {"_users_lookup": 0}},
+    ]
+    results = []
+    current_period = _month_period()
+    for c in _companies.aggregate(pipeline):
+        c["_id"] = str(c["_id"])
+        # Read credits directly from the doc, auto-reset if period changed
+        credits = c.get("credits") or {}
+        if credits.get("period") != current_period:
+            credits = reset_company_credits_if_due(c["_id"])
+        c["credits"] = credits
+        results.append(c)
+    return results
+
+
 def update_company(company_id: str, updates: dict) -> None:
     _companies.update_one(
         {"_id": ObjectId(company_id)},
@@ -283,6 +365,25 @@ def restore_company(company_id: str, restored_by: str = "") -> dict:
         {"$set": {"status": "active"}},
     ).modified_count
     return {"restored": True, "users_reactivated": users_reactivated}
+
+
+def permanent_delete_company(company_id: str) -> dict:
+    """Hard-delete a company and ALL associated data. Irreversible (BUG 25)."""
+    cid = ObjectId(company_id)
+    users_deleted = _users.delete_many({"company_id": cid}).deleted_count
+    candidates_deleted = _candidates.delete_many({"company_id": company_id}).deleted_count
+    jobs_deleted = _jobs.delete_many({"company_id": company_id}).deleted_count
+    usage_deleted = _usage_log.delete_many({"company_id": company_id}).deleted_count
+    email_logs_deleted = _email_logs.delete_many({"metadata.company_id": company_id}).deleted_count
+    company_deleted = _companies.delete_one({"_id": cid}).deleted_count
+    return {
+        "company_deleted": company_deleted,
+        "users_deleted": users_deleted,
+        "candidates_deleted": candidates_deleted,
+        "jobs_deleted": jobs_deleted,
+        "usage_logs_deleted": usage_deleted,
+        "email_logs_deleted": email_logs_deleted,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1098,13 +1199,30 @@ def upsert_candidate(
     company_id: str | None = None,
     job_id: str | None = None,
 ) -> None:
-    doc = _resume_to_dict(resume)
-    doc["pipelineStage"] = pipeline_stage
+    """Insert a new candidate or update resume fields for an existing one.
+
+    On re-upload (same email + company + job), only the resume-sourced fields
+    are refreshed.  Pipeline state, invitations, interview results, transcripts,
+    recordings, and email-sent flags are **preserved** so that a resume update
+    never silently destroys a candidate's progress.  (BUG 29 fix)
+    """
+    filt = _candidate_filter(resume.email, company_id, job_id)
+    resume_fields = _resume_to_dict(resume)
     if company_id:
-        doc["company_id"] = str(company_id)
+        resume_fields["company_id"] = str(company_id)
     if job_id:
-        doc["job_id"] = job_id
-    _candidates.replace_one(_candidate_filter(resume.email, company_id, job_id), doc, upsert=True)
+        resume_fields["job_id"] = job_id
+
+    # $set always updates resume data; $setOnInsert sets pipeline stage only on
+    # first insert so a re-upload cannot reset an in-progress candidate.
+    _candidates.update_one(
+        filt,
+        {
+            "$set": resume_fields,
+            "$setOnInsert": {"pipelineStage": pipeline_stage},
+        },
+        upsert=True,
+    )
 
 
 def get_candidate_doc(email: str, company_id: str | None = None, job_id: str | None = None) -> dict | None:
@@ -1196,6 +1314,35 @@ def clear_candidate_scores(company_id: str | None = None, job_id: str | None = N
     query = _candidate_query(company_id, job_id)
     result = _candidates.update_many(query, {"$unset": {"cached_score": ""}})
     return result.modified_count
+
+
+def get_scoring_fields(job_data: Any) -> dict[str, Any]:
+    """Extract and normalize fields that directly impact candidate scoring."""
+    if not job_data:
+        return {}
+    if hasattr(job_data, "__dataclass_fields__"):
+        data = asdict(job_data)
+    elif hasattr(job_data, "__dict__"):
+        data = job_data.__dict__
+    elif isinstance(job_data, dict):
+        data = job_data
+    else:
+        return {}
+
+    def _norm_list(val: Any) -> list[str]:
+        if isinstance(val, list):
+            return sorted(str(x).strip().lower() for x in val if str(x).strip())
+        return []
+
+    return {
+        "title": str(data.get("title", "")).strip().lower(),
+        "required_skills": _norm_list(data.get("required_skills")),
+        "nice_to_have_skills": _norm_list(data.get("nice_to_have_skills")),
+        "experience_years": int(data.get("experience_years") or 0),
+        "education": str(data.get("education", "")).strip().lower(),
+        "description": " ".join(str(data.get("description", "")).split()).lower(),
+        "threshold": int(data.get("threshold") or 80),
+    }
 
 
 def append_transcript_turn(
@@ -1344,3 +1491,21 @@ def get_email_logs(filters: dict, page: int = 1, limit: int = 25) -> dict:
         "limit": limit,
         "entries": [_clean(e) for e in entries],
     }
+
+
+def find_recent_email_log(
+    to_email: str,
+    email_type: str,
+    company_id: str,
+    seconds: int = 60,
+) -> dict | None:
+    """Check if an email of the given type was sent recently (BUG 21 dedup)."""
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=seconds)
+    return _email_logs.find_one({
+        "to_email": to_email,
+        "email_type": email_type,
+        "metadata.company_id": company_id,
+        "status": "sent",
+        "sent_at": {"$gte": cutoff},
+    })

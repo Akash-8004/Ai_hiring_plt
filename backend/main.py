@@ -17,7 +17,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFi
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from backend.core.models import JobDescription, ParsedResume
 from backend.core.sample_data import DEFAULT_JOB
@@ -28,7 +28,7 @@ from backend.services.HR_Round.hr_evaluator import HREvaluator
 from backend.services.Technical.interviewer import get_interviewer_prompt
 from backend.services.Technical.question_processor import QuestionProcessor
 from backend.services.drive_metrics import compute_drive_metrics, score_candidates_for_drive
-from backend.services.resume_parser import clean_other_links, extract_other_links, parse_resume_text, parse_uploaded_resume_with_ai, parse_resume_text_with_ai
+from backend.services.resume_parser import clean_other_links, extract_other_links, parse_resume_text, parse_uploaded_resume_with_ai, parse_resume_text_with_ai, _is_text_empty
 from backend.services.Technical.technical_evaluator import TechnicalInterviewEvaluator
 from backend.services import r2_storage
 from backend.storage import database
@@ -49,7 +49,15 @@ from backend.admin.routes import admin_router, company_router
 from backend.leads.routes import router as leads_router
 
 
-app = FastAPI(title="AI Hiring Platform API", version="0.2.0")
+_is_dev = os.getenv("ENV", "production").lower() == "dev"
+
+app = FastAPI(
+    title="AI Hiring Platform API",
+    version="0.2.0",
+    docs_url="/docs" if _is_dev else None,
+    redoc_url="/redoc" if _is_dev else None,
+    openapi_url="/openapi.json" if _is_dev else None,
+)
 
 _cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 _extra_cors = os.getenv("CORS_ALLOWED_ORIGINS", "")
@@ -65,6 +73,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ── Security headers middleware (BUG 22) ────────────────────────────────────
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"
+    if not _is_dev:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
 # ── Register auth & admin routers ───────────────────────────────────────────
 app.include_router(auth_router)
 app.include_router(admin_router)
@@ -77,6 +98,8 @@ hr_evaluator = HREvaluator()
 technical_evaluator = TechnicalInterviewEvaluator()
 question_processor = QuestionProcessor()
 
+ALLOWED_RESUME_EXTENSIONS = {".pdf", ".docx", ".txt"}
+
 
 # ── Startup: seed Super Admin ──────────────────────────────────────────────
 
@@ -84,7 +107,7 @@ question_processor = QuestionProcessor()
 def seed_super_admin():
     """Create the initial Super Admin from .env if none exists."""
     if database.count_super_admins() == 0:
-        email = os.getenv("SUPER_ADMIN_EMAIL", "admin@aihiring.com")
+        email = os.getenv("SUPER_ADMIN_EMAIL", "admin@aihiring.com").strip().lower()
         password = os.getenv("SUPER_ADMIN_PASSWORD", "Admin@123456")
 
         if not database.get_user_by_email(email):
@@ -122,37 +145,74 @@ def seed_super_admin():
             })
 
     database.backfill_job_drives()
+    database.normalize_user_emails()
 
 
 # ── Pydantic Models ────────────────────────────────────────────────────────
 
+_REQUIRED_JOB_TEXT = {
+    "title": "Job drive title",
+    "department": "Department",
+    "location": "Location",
+    "education": "Education",
+    "description": "Job description",
+}
+
+
+def _required_job_field_error(data: dict) -> str | None:
+    """Return the first missing required job field error, or None."""
+    for field, label in _REQUIRED_JOB_TEXT.items():
+        if not str(data.get(field, "")).strip():
+            return f"{label} is required"
+    skills = data.get("required_skills")
+    if not skills or not any(str(s).strip() for s in skills):
+        return "Enter at least one required skill"
+    return None
+
+
 class JobPayload(BaseModel):
-    title: str
-    department: str
-    location: str
+    title: str = Field(max_length=200)
+    department: str = Field(max_length=150)
+    location: str = Field(max_length=200)
     experience_years: int = Field(ge=0, le=30)
     required_skills: list[str]
     nice_to_have_skills: list[str] = []
-    education: str
-    description: str
+    education: str = Field(max_length=1000)
+    description: str = Field(max_length=50000)
     threshold: int = Field(ge=40, le=100)
     hr_interview_duration: int = Field(default=7, ge=3, le=60)
     technical_interview_duration: int = Field(default=5, ge=3, le=60)
     custom_questions: list[dict] = Field(default_factory=list)
     job_id: str | None = None
 
+    @field_validator("title", "department", "location", "education", "description")
+    @classmethod
+    def validate_required_text(cls, v: str, info: ValidationInfo) -> str:
+        value = v.strip() if isinstance(v, str) else ""
+        if not value:
+            raise ValueError(f"{_REQUIRED_JOB_TEXT[info.field_name]} is required")
+        return value
+
+    @field_validator("required_skills", "nice_to_have_skills")
+    @classmethod
+    def validate_skills(cls, v: list[str], info: ValidationInfo) -> list[str]:
+        skills = [s.strip()[:200] for s in v if isinstance(s, str) and s.strip()]
+        if info.field_name == "required_skills" and not skills:
+            raise ValueError("Enter at least one required skill")
+        return skills
+
 
 class ManualResumePayload(BaseModel):
     file_name: str = "manual_resume.txt"
-    text: str
+    text: str = Field(max_length=300000)
 
 
 class RejectJdPayload(BaseModel):
-    note: str = ""
+    note: str = Field(default="", max_length=5000)
 
 
 class ProcessQuestionsPayload(BaseModel):
-    text: str = ""
+    text: str = Field(default="", max_length=50000)
 
 
 class EvaluationPayload(BaseModel):
@@ -228,9 +288,13 @@ def update_job(
         effective_job_id = stored["job_id"]
         database.set_active_drive(company_id, effective_job_id)
         action = "job.created"
+        database.clear_candidate_scores(company_id, job_id=effective_job_id)
     else:
-        if not database.get_job_by_id(company_id, effective_job_id):
+        old_job = database.get_job_by_id(company_id, effective_job_id)
+        if not old_job:
             raise HTTPException(status_code=404, detail="Drive not found")
+        old_scoring = database.get_scoring_fields(old_job)
+        new_scoring = database.get_scoring_fields(job)
         database.upsert_job(job, company_id, job_id=effective_job_id)
         action = "job.updated"
         if database.has_pending_jd_request(company_id, effective_job_id):
@@ -241,8 +305,8 @@ def update_job(
                 reviewed_by={"id": str(user.get("_id") or ""), "email": user.get("email")},
                 note="Drive updated directly by company admin",
             )
-
-    database.clear_candidate_scores(company_id, job_id=effective_job_id)
+        if old_scoring != new_scoring:
+            database.clear_candidate_scores(company_id, job_id=effective_job_id)
     log_activity(
         action=action,
         category="job",
@@ -257,12 +321,13 @@ def update_job(
 
 @app.get("/api/job/requests")
 def list_job_requests(
-    user: dict = Depends(require_authenticated),
+    user: dict = Depends(require_job_manage),
 ) -> dict[str, Any]:
     """List JD change requests for the caller's company.
 
-    Company admins see all requests; sub-users see only the requests they
-    submitted (so they can track their own pending proposals).
+    Company admins / users with ``manage_jobs`` (the same access required to
+    submit a change request) may read the queue. Sub-users see only the requests
+    they submitted (so they can track their own pending proposals).
     """
     company_id = str(user["company_id"]) if user.get("company_id") else None
     if not company_id:
@@ -314,19 +379,25 @@ def approve_job_request(
         return _workspace_payload(company_id, user, job_id=effective_job_id)
 
     proposed = dict(req_doc.get("proposed") or {})
+    if err := _required_job_field_error(proposed):
+        raise HTTPException(status_code=422, detail=err)
     job = JobDescription(**proposed)
 
     if target_status == "create":
         stored = database.upsert_job(job, company_id, job_id=job_id)
         effective_job_id = stored["job_id"]
         database.set_active_drive(company_id, effective_job_id)
+        database.clear_candidate_scores(company_id, job_id=effective_job_id)
     else:
-        if not database.get_job_by_id(company_id, job_id):
+        old_job = database.get_job_by_id(company_id, job_id)
+        if not old_job:
             raise HTTPException(status_code=404, detail="Drive not found")
+        old_scoring = database.get_scoring_fields(old_job)
+        new_scoring = database.get_scoring_fields(job)
         effective_job_id = job_id
         database.upsert_job(job, company_id, job_id=job_id)
-
-    database.clear_candidate_scores(company_id, job_id=effective_job_id)
+        if old_scoring != new_scoring:
+            database.clear_candidate_scores(company_id, job_id=effective_job_id)
     database.resolve_jd_request(
         company_id, job_id, "approved",
         reviewed_by={"id": str(user.get("_id") or ""), "email": user.get("email")},
@@ -459,6 +530,12 @@ async def process_questions_file(
     """Restructure HR-supplied coding questions from an uploaded PDF/DOCX/TXT."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="A file is required.")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ALLOWED_RESUME_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{ext or 'unknown'}'. Allowed formats: PDF, DOCX, TXT.",
+        )
     questions = await asyncio.to_thread(question_processor.process_file, file)
     return {
         "questions": questions,
@@ -519,6 +596,17 @@ async def upload_resumes(
     job_id = _active_drive_id(company_id)
     if not job_id:
         raise HTTPException(status_code=400, detail="Create a job drive first")
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    for file in files:
+        suffix = Path(file.filename or "").suffix.lower()
+        if suffix not in ALLOWED_RESUME_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type '{suffix or 'unknown'}' for file '{file.filename}'. Allowed formats: PDF, DOCX, TXT.",
+            )
+
     file_names = []
     for file in files:
         contents = await file.read()
@@ -721,7 +809,6 @@ def interview_session(token: str) -> dict[str, Any]:
         "candidateName": resume.full_name,
         "jobTitle": current_job.title,
         "companyName": company_name,
-        "resumeText": resume.raw_text,
         "interviewType": interview_type,
         "systemPrompt": system_prompt,
         "customQuestions": (
@@ -1207,6 +1294,11 @@ def _workspace_payload(
         row["location"] = result.candidate.location
         row["professionalSummary"] = result.candidate.summary
         row["parsingProvider"] = result.candidate.parsing_provider
+        row["noText"] = bool(
+            result.candidate.parsing_provider == "none"
+            or (result.candidate.raw_text or "").startswith("[NO_TEXT_EXTRACTED]")
+            or _is_text_empty(result.candidate.raw_text)
+        )
         row["breakdown"] = result.score.breakdown
         row["uploadedAt"] = result.candidate.uploaded_at.isoformat()
         doc = database.get_candidate_doc(
@@ -1361,6 +1453,15 @@ def _run_interview_evaluation(
         else job.hr_interview_duration
     )
 
+    # ── BUG 37: Idempotency guard — if the interview was already evaluated,
+    # return the existing result so credits are never consumed twice. ──────────
+    interview_field = "technical_interview" if interview_type == "technical" else "hr_interview"
+    existing_doc = database.get_candidate_doc(email, company_id, job_id) or {}
+    existing_interview = existing_doc.get(interview_field) or {}
+    if existing_interview.get("status") == "completed":
+        existing_eval = existing_interview.get("evaluation") or {}
+        return {"email": email, "interview_type": interview_type, **existing_eval}
+
     if company_id:
         consume_result = database.consume_credits(str(company_id), minutes)
         credits_bucket = database.get_company_credits(str(company_id))
@@ -1461,6 +1562,12 @@ def _normalise_deadline(value: str | None) -> str | None:
     parsed = _parse_deadline(value)
     if not parsed:
         raise HTTPException(status_code=400, detail="Deadline must be a valid ISO 8601 datetime.")
+    # BUG 32: reject deadlines that are already in the past.
+    if parsed <= datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=400,
+            detail="Deadline cannot be in the past. Please choose a future date and time.",
+        )
     return parsed.isoformat()
 
 
@@ -1547,10 +1654,15 @@ def _email_for_token(token: str) -> str | None:
 
 def _parse_uploaded_bytes(file_name: str, contents: bytes) -> ParsedResume:
     suffix = Path(file_name).suffix.lower()
+    if suffix not in ALLOWED_RESUME_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file format '{suffix or 'unknown'}'. Allowed formats: PDF, DOCX, TXT.",
+        )
     stream = BytesIO(contents)
     stream.name = file_name
 
-    if suffix in {".txt", ".docx", ".pdf"}:
+    if suffix in {".docx", ".pdf"}:
         return parse_uploaded_resume_with_ai(stream)
     return parse_resume_text_with_ai(file_name, contents.decode("utf-8", errors="ignore"))
 

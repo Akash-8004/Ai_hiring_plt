@@ -1,5 +1,5 @@
 import React from "react";
-import { XCircle } from "lucide-react";
+import { AlertTriangle, XCircle } from "lucide-react";
 
 function value(value, fallback = "Not available") {
   return value && value !== "Not found" ? value : fallback;
@@ -10,6 +10,12 @@ function linkHref(url) {
 }
 
 export function CandidateResumePreview({ candidate, onClose }) {
+  const isUnparseable = Boolean(
+    candidate.noText ||
+    candidate.resumeText?.startsWith("[NO_TEXT_EXTRACTED]") ||
+    candidate.parsingProvider === "none"
+  );
+
   return (
     <aside className="candidate-preview">
       <button className="icon-button panel-close" onClick={onClose} title="Close">
@@ -22,6 +28,19 @@ export function CandidateResumePreview({ candidate, onClose }) {
           <span>{candidate.Email}</span>
         </div>
       </div>
+
+      {isUnparseable ? (
+        <div className="no-text-warning-banner">
+          <AlertTriangle size={22} className="warning-banner-icon" />
+          <div className="warning-banner-body">
+            <strong>Unparseable Document (No Readable Text Extracted)</strong>
+            <p>
+              No readable text could be extracted from this file. The system accepts text-based <strong>PDF, DOCX, and TXT</strong> files.
+              Scanned or image-only PDFs without an embedded text layer cannot be parsed. Please re-upload a text-based version of this candidate's resume.
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       <section>
         <h3>Extracted Candidate Details</h3>

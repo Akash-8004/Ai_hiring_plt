@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
-  CheckCircle2, ArrowLeft, ArrowRight, Sparkles, ShieldCheck,
+  CheckCircle2, ArrowLeft, ArrowRight, RefreshCw, Sparkles, ShieldCheck,
   Calendar, Clock, Users, Star,
 } from "lucide-react";
 import { MarketingLayout } from "./MarketingLayout";
@@ -35,6 +35,23 @@ export function BookDemoPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
 
+  const [captcha, setCaptcha] = useState({ token: "", question: "" });
+  const [captchaAnswer, setCaptchaAnswer] = useState("");
+
+  const loadCaptcha = async () => {
+    try {
+      const data = await apiFetchJson("/api/public/captcha");
+      setCaptcha({ token: data.token, question: data.question });
+      setCaptchaAnswer("");
+    } catch {
+      setCaptcha({ token: "", question: "" });
+    }
+  };
+
+  useEffect(() => {
+    loadCaptcha();
+  }, []);
+
   const update = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
 
   const handleSubmit = async (e) => {
@@ -44,11 +61,18 @@ export function BookDemoPage() {
     try {
       await apiFetchJson("/api/public/leads", {
         method: "POST",
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          ...form,
+          captcha_token: captcha.token,
+          captcha_answer: captchaAnswer,
+        }),
       });
       setSuccess(true);
     } catch (err) {
       setError(err.message || "Failed to submit request. Please verify your details.");
+      if (/security check|captcha/i.test(err.message || "")) {
+        loadCaptcha();
+      }
     } finally {
       setLoading(false);
     }
@@ -148,6 +172,7 @@ export function BookDemoPage() {
                   value={form.company_name}
                   onChange={update("company_name")}
                   placeholder="e.g. Acme Corp"
+                  maxLength={200}
                   required
                 />
               </div>
@@ -157,6 +182,7 @@ export function BookDemoPage() {
                   value={form.industry}
                   onChange={update("industry")}
                   placeholder="e.g. Fintech, Healthcare"
+                  maxLength={100}
                 />
               </div>
             </div>
@@ -168,6 +194,7 @@ export function BookDemoPage() {
                   value={form.contact_name}
                   onChange={update("contact_name")}
                   placeholder="e.g. Sarah Jenkins"
+                  maxLength={120}
                   required
                 />
               </div>
@@ -178,6 +205,7 @@ export function BookDemoPage() {
                   value={form.work_email}
                   onChange={update("work_email")}
                   placeholder="sarah@company.com"
+                  maxLength={254}
                   required
                 />
               </div>
@@ -191,6 +219,7 @@ export function BookDemoPage() {
                   value={form.phone}
                   onChange={update("phone")}
                   placeholder="+1 (555) 000-0000"
+                  maxLength={30}
                 />
               </div>
               <div className="mkt-form-group">
@@ -214,23 +243,59 @@ export function BookDemoPage() {
               </select>
             </div>
 
-            <div className="mkt-form-group">
-              <label>Message / Specific Hiring Goals</label>
-              <textarea
-                value={form.message}
-                onChange={update("message")}
-                placeholder="Tell us about your hiring challenges or specific requirements..."
-              />
-            </div>
+<div className="mkt-form-group">
+                <label>Message / Specific Hiring Goals</label>
+                <textarea
+                  value={form.message}
+                  onChange={update("message")}
+                  placeholder="Tell us about your hiring challenges or specific requirements..."
+                  maxLength={5000}
+                />
+              </div>
 
-            <button
-              type="submit"
-              className="mkt-btn mkt-btn-primary mkt-btn-lg"
-              disabled={loading}
-              style={{ marginTop: "0.5rem" }}
-            >
-              {loading ? "Scheduling Demo..." : "Schedule My Demo"} <ArrowRight size={17} />
-            </button>
+              <div className="mkt-form-group">
+                <label>Security Check *</label>
+                <div className="mkt-captcha">
+                  {captcha.question ? (
+                    <>
+                      <span className="mkt-captcha-question">
+                        What is {captcha.question}
+                      </span>
+                      <input
+                        type="text"
+                        value={captchaAnswer}
+                        onChange={(e) => setCaptchaAnswer(e.target.value)}
+                        placeholder="Your answer"
+                        maxLength={10}
+                        autoComplete="off"
+                        required
+                      />
+                      <button
+                        type="button"
+                        className="mkt-captcha-refresh"
+                        onClick={loadCaptcha}
+                        aria-label="New challenge"
+                        title="New challenge"
+                      >
+                        <RefreshCw size={15} />
+                      </button>
+                    </>
+                  ) : (
+                    <span className="mkt-captcha-question">
+                      Loading security check...
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="mkt-btn mkt-btn-primary mkt-btn-lg"
+                disabled={loading || !captcha.question}
+                style={{ marginTop: "0.5rem" }}
+              >
+                {loading ? "Scheduling Demo..." : "Schedule My Demo"} <ArrowRight size={17} />
+              </button>
           </form>
         </div>
       </div>

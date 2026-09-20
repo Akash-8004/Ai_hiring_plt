@@ -1,6 +1,9 @@
 """JWT token management, password hashing, and FastAPI auth dependencies."""
 
+import hashlib
 import os
+import secrets
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -22,27 +25,59 @@ REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
-# ── Simple in-memory rate limiter for login endpoint ────────────────────────
+# ── Simple in-memory rate limiters ──────────────────────────────────────────
 
 _login_attempts: dict[str, list[float]] = {}
 LOGIN_RATE_LIMIT = 5         # max attempts
 LOGIN_RATE_WINDOW = 60.0     # per 60 seconds
 
+_lead_attempts: dict[str, list[float]] = {}
+LEAD_RATE_LIMIT = int(os.getenv("LEAD_RATE_LIMIT", "5"))               # max submissions
+LEAD_RATE_WINDOW = float(os.getenv("LEAD_RATE_WINDOW_SECONDS", "60"))  # per window
 
-def check_login_rate_limit(ip: str) -> None:
-    """Raise 429 if the IP has exceeded login rate limit."""
-    import time
+
+def _check_rate_limit(
+    store: dict[str, list[float]],
+    key: str,
+    limit: int,
+    window_seconds: float,
+    detail: str,
+) -> None:
+    """Raise 429 if ``key`` has exceeded the limit within the sliding window."""
     now = time.time()
-    attempts = _login_attempts.get(ip, [])
-    # Prune old attempts
-    attempts = [t for t in attempts if now - t < LOGIN_RATE_WINDOW]
-    if len(attempts) >= LOGIN_RATE_LIMIT:
+    attempts = [t for t in store.get(key, []) if now - t < window_seconds]
+    remaining = limit - len(attempts)
+    if remaining <= 0:
+        store[key] = attempts
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many login attempts. Please try again later.",
+            detail=detail,
+            headers={"Retry-After": str(int(window_seconds))},
         )
     attempts.append(now)
-    _login_attempts[ip] = attempts
+    store[key] = attempts
+
+
+def check_login_rate_limit(ip: str) -> None:
+    """Raise 429 if the IP has exceeded the login rate limit."""
+    _check_rate_limit(
+        _login_attempts,
+        ip,
+        LOGIN_RATE_LIMIT,
+        LOGIN_RATE_WINDOW,
+        "Too many login attempts. Please try again later.",
+    )
+
+
+def check_lead_rate_limit(ip: str) -> None:
+    """Raise 429 if the IP has exceeded the public lead form rate limit."""
+    _check_rate_limit(
+        _lead_attempts,
+        ip,
+        LEAD_RATE_LIMIT,
+        LEAD_RATE_WINDOW,
+        "Too many submissions from this address. Please try again later.",
+    )
 
 
 # ── Password Utilities ──────────────────────────────────────────────────────
@@ -57,6 +92,18 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 # ── JWT Utilities ───────────────────────────────────────────────────────────
 
+def session_fingerprint(refresh_token: str) -> str:
+    """Non-reversible fingerprint binding an access token to a specific session.
+
+    The access token carries this SHA-256 fingerprint of the active refresh
+    token as its ``sess`` claim. ``get_current_user`` later compares it against
+    the fingerprint of the currently stored ``active_session_token`` so that
+    logging out (or logging in elsewhere) instantly invalidates previously
+    issued access tokens instead of leaving them usable until expiry.
+    """
+    return hashlib.sha256((refresh_token or "").encode("utf-8")).hexdigest()
+
+
 def create_access_token(data: dict[str, Any]) -> str:
     payload = data.copy()
     payload["exp"] = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -67,6 +114,7 @@ def create_access_token(data: dict[str, Any]) -> str:
 def create_refresh_token(data: dict[str, Any]) -> str:
     payload = data.copy()
     payload["exp"] = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    payload["jti"] = secrets.token_urlsafe(16)
     payload["type"] = "refresh"
     return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
@@ -126,6 +174,17 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account suspended. Contact your administrator.",
+        )
+
+    # Session binding: an access token is only valid while it belongs to the
+    # user's currently active session. Logout clears active_session_token, so
+    # any access token issued for that session is rejected immediately.
+    active_session_token = user.get("active_session_token")
+    if not active_session_token or payload.get("sess") != session_fingerprint(active_session_token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session has been terminated. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
     # Check company is active (for non-super-admins)

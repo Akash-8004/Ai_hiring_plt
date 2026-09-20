@@ -19,6 +19,7 @@ from backend.auth.security import (
     hash_password,
     log_activity,
     require_authenticated,
+    session_fingerprint,
     verify_password,
 )
 from backend.storage import database
@@ -65,14 +66,15 @@ def login(body: LoginRequest, request: Request):
             )
         company_name = company.get("name")
 
-    # Create tokens
+    # Create tokens. The access token is bound to the refresh token (session)
+    # so that logging out instantly invalidates outstanding access tokens.
     token_data = {
         "sub": str(user["_id"]),
         "role": user["role"],
         "company_id": str(user["company_id"]) if user.get("company_id") else None,
     }
-    access_token = create_access_token(token_data)
     refresh_token = create_refresh_token(token_data)
+    access_token = create_access_token({**token_data, "sess": session_fingerprint(refresh_token)})
 
     # Check if there was a previous session (for audit log)
     had_previous_session = bool(user.get("active_session_token"))
@@ -160,11 +162,24 @@ def refresh_token(body: RefreshRequest):
         "role": user["role"],
         "company_id": str(user["company_id"]) if user.get("company_id") else None,
     }
-    new_access = create_access_token(token_data)
+    # Rotate the refresh token: issue a fresh one, bind the new access token to
+    # it, and persist it as the active session token — atomically. The presented
+    # token is invalidated, so a stolen refresh token can only be used once.
+    new_refresh = create_refresh_token(token_data)
+    if not database.rotate_session_token(
+        str(user["_id"]),
+        body.refresh_token,
+        new_refresh,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session invalidated — logged in from another location",
+        )
+    new_access = create_access_token({**token_data, "sess": session_fingerprint(new_refresh)})
 
     return TokenResponse(
         access_token=new_access,
-        refresh_token=body.refresh_token,  # reuse same refresh token
+        refresh_token=new_refresh,
         user=UserProfile(
             id=str(user["_id"]),
             email=user["email"],

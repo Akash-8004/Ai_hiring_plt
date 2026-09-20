@@ -1,30 +1,6 @@
 import React from "react";
-import { CheckCircle2, Clock, FileText, Sparkles, XCircle } from "lucide-react";
-
-// Derive where the candidate currently sits in the hiring pipeline. We check
-// the most-advanced stage first and fall back to the resume screening result,
-// so the badge always reflects the candidate's *latest* position.
-function pipelineStatus(candidate) {
-  const hr = candidate.hr_interview || {};
-  const tech = candidate.technical_interview || {};
-  if (tech.status === "completed") {
-    return tech.decision === "PASS"
-      ? { label: "Hired", cls: "shortlisted" }
-      : { label: "Tech Rejected", cls: "rejected" };
-  }
-  if (candidate.invitation?.link) return { label: "Tech Invited", cls: "invited" };
-  if (hr.status === "completed") {
-    return hr.decision === "PASS"
-      ? { label: "HR Passed", cls: "shortlisted" }
-      : { label: "HR Rejected", cls: "rejected" };
-  }
-  if (candidate.hr_invitation?.link) return { label: "HR Invited", cls: "invited" };
-  return candidate.Status === "Shortlisted"
-    ? { label: "Resume Shortlisted", cls: "shortlisted" }
-    : { label: "Resume Rejected", cls: "rejected" };
-}
-
-const STATUS_ICON = { shortlisted: CheckCircle2, rejected: XCircle, invited: Clock };
+import { AlertTriangle, FileText, Sparkles } from "lucide-react";
+import { pipelineStatus, STATUS_ICON } from "../../utils/pipelineStatus";
 
 // Parsers store "Not found" when a number is absent — treat that as no phone.
 function hasPhone(phone) {
@@ -65,7 +41,17 @@ export function CandidateTable({ candidates, onCandidate, onViewDetails }) {
             return (
               <tr key={`${candidate.Email}-${candidate.Name}`}>
                 <td>
-                  <strong>{candidate.Name}</strong>
+                  <div className="candidate-name-wrap">
+                    <strong>{candidate.Name}</strong>
+                    {candidate.noText ? (
+                      <span
+                        className="no-text-tag"
+                        title="No readable text extracted. Document may be a scanned image or empty/corrupt file."
+                      >
+                        <AlertTriangle size={12} /> No text extracted
+                      </span>
+                    ) : null}
+                  </div>
                   <span>{candidate.Email}</span>
                   {hasPhone(candidate.Phone) ? <span>{candidate.Phone}</span> : null}
                 </td>

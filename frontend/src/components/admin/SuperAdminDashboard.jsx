@@ -27,6 +27,7 @@ import {
   Pencil,
   Archive,
   RotateCcw,
+  Trash2,
 } from "lucide-react";
 import { apiFetchJson } from "../../utils/api";
 import { useAuth } from "../../hooks/useAuth";
@@ -55,6 +56,8 @@ export function SuperAdminDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [credentialEmailSending, setCredentialEmailSending] = useState(false);
   const [credentialEmailSent, setCredentialEmailSent] = useState(null);
+  const [detailsEmailSending, setDetailsEmailSending] = useState(null);
+  const [detailsEmailSent, setDetailsEmailSent] = useState({});
   const [companyFilter, setCompanyFilter] = useState("");
   const [expandedCompanyId, setExpandedCompanyId] = useState(null);
   const [expandedUsers, setExpandedUsers] = useState([]);
@@ -226,6 +229,25 @@ export function SuperAdminDashboard() {
     }
   };
 
+  const handlePermanentDeleteCompany = async (comp) => {
+    const confirmed = window.prompt(
+      `⚠️ PERMANENTLY DELETE "${comp.name}"?\n\nThis will irreversibly remove the company and ALL its data including:\n• All team members/users\n• All candidates and resumes\n• All job postings\n• All usage and email logs\n\nThis action CANNOT be undone.\n\nType the exact company name to confirm:`,
+      ""
+    );
+    if (confirmed === null) return;
+    if (confirmed.trim() !== comp.name) {
+      alert("Company name did not match. Permanent deletion cancelled.");
+      return;
+    }
+    try {
+      await apiFetchJson(`/api/admin/companies/${comp._id}/permanent-delete`, { method: "POST" });
+      await refreshAllData();
+      await loadArchivedCompanies();
+    } catch (err) {
+      alert(err.message || "Failed to permanently delete company.");
+    }
+  };
+
   const handleSaveEditUser = async (userId) => {
     if (!editUserForm.full_name?.trim()) {
       alert("Full name is required.");
@@ -309,17 +331,39 @@ export function SuperAdminDashboard() {
     if (!delta) return;
     setCreditAdjustLoading(true);
     try {
-      await apiFetchJson(`/api/admin/companies/${companyId}/credits`, {
+      const res = await apiFetchJson(`/api/admin/companies/${companyId}/credits`, {
         method: "POST",
         body: JSON.stringify({ delta, note: `Manual ${delta > 0 ? "add" : "remove"} by Super Admin` }),
       });
       setCreditAdjustAmount("");
       await loadCompanyUsage(companyId, usagePage);
       await refreshAllData();
+      if (res.email && res.email.ok === false) {
+        alert("Credits updated, but the notification email to the company admin failed.");
+      }
     } catch (err) {
       alert(err.message || "Failed to adjust credits.");
     } finally {
       setCreditAdjustLoading(false);
+    }
+  };
+
+  const handleSendCompanyDetails = async (companyId) => {
+    setDetailsEmailSending(companyId);
+    setDetailsEmailSent((prev) => {
+      const next = { ...prev };
+      delete next[companyId];
+      return next;
+    });
+    try {
+      const res = await apiFetchJson(`/api/admin/companies/${companyId}/send-company-details`, {
+        method: "POST",
+      });
+      setDetailsEmailSent((prev) => ({ ...prev, [companyId]: res.ok ? "sent" : "failed" }));
+    } catch {
+      setDetailsEmailSent((prev) => ({ ...prev, [companyId]: "failed" }));
+    } finally {
+      setDetailsEmailSending(null);
     }
   };
 
@@ -671,10 +715,10 @@ export function SuperAdminDashboard() {
                             </button>
                             <button
                               className="btn btn-xs btn-danger-ghost"
-                              title="Permanently delete this company and all its data"
+                              title="Archive this company (soft delete). Data is preserved and can be restored later."
                               onClick={() => handleDeleteCompany(comp)}
                             >
-                              Delete
+                              Archive
                             </button>
                           </div>
                         </td>
@@ -819,6 +863,13 @@ export function SuperAdminDashboard() {
                               >
                                 <RotateCcw size={12} /> Restore
                               </button>
+                              <button
+                                className="btn btn-xs btn-danger"
+                                title="Permanently delete this company and all its data. This cannot be undone."
+                                onClick={() => handlePermanentDeleteCompany(comp)}
+                              >
+                                <Trash2 size={12} /> Delete Permanently
+                              </button>
                             </div>
                           ) : (
                             <div className="flex-row gap-2">
@@ -942,6 +993,22 @@ export function SuperAdminDashboard() {
                                         onClick={() => handleAdjustCredits(comp._id, -Number(creditAdjustAmount))}
                                       >
                                         Remove Credits
+                                      </button>
+                                      <button
+                                        className={`btn btn-secondary btn-xs ml-auto ${detailsEmailSent[comp._id] === "sent" ? "email-send-btn sent" : detailsEmailSent[comp._id] === "failed" ? "email-send-btn failed" : ""}`}
+                                        disabled={detailsEmailSending === comp._id || detailsEmailSent[comp._id] === "sent"}
+                                        onClick={() => handleSendCompanyDetails(comp._id)}
+                                        title="Email account summary to the company admin"
+                                      >
+                                        {detailsEmailSending === comp._id ? (
+                                          <><Loader2 size={13} className="spin" /> Sending</>
+                                        ) : detailsEmailSent[comp._id] === "sent" ? (
+                                          <>✓ Sent</>
+                                        ) : detailsEmailSent[comp._id] === "failed" ? (
+                                          <><Mail size={13} /> Retry</>
+                                        ) : (
+                                          <><Mail size={13} /> Mail Company Detail to Admin</>
+                                        )}
                                       </button>
                                     </div>
                                     <table className="sub-users-table mt-4">

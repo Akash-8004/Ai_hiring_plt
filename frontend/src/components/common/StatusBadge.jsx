@@ -1,12 +1,15 @@
 import React from "react";
-import { CheckCircle2, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, XCircle } from "lucide-react";
 
-export function StatusBadge({ status }) {
-  const positive = status === "Shortlisted";
+const ICONS = { shortlisted: CheckCircle2, rejected: XCircle, invited: Clock, unparseable: AlertTriangle };
+
+export function StatusBadge({ status, cls, label }) {
+  const key = cls || (status === "Shortlisted" ? "shortlisted" : "rejected");
+  const Icon = ICONS[key] || CheckCircle2;
   return (
-    <span className={positive ? "status-badge shortlisted" : "status-badge rejected"}>
-      {positive ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
-      {status}
+    <span className={`status-badge ${key}`}>
+      <Icon size={15} />
+      {label || status}
     </span>
   );
 }

@@ -13,6 +13,8 @@ import {
   Info,
   X,
   Copy,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { apiFetchJson } from "../../utils/api";
 import { CompanyActivityLog } from "./CompanyActivityLog";
@@ -30,6 +32,9 @@ export function TeamManagementView() {
   const [permissions, setPermissions] = useState(["conduct_interviews", "view_pipeline"]);
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [emailError, setEmailError] = useState("");
   const [createdUser, setCreatedUser] = useState(null);
   const [copied, setCopied] = useState(false);
 
@@ -74,6 +79,26 @@ export function TeamManagementView() {
   const handleCreateSubUser = async (e) => {
     e.preventDefault();
     setFormError("");
+    setPasswordError("");
+    setEmailError("");
+
+    const emailPattern = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+    if (!emailPattern.test(email.trim())) {
+      setEmailError("Invalid email address");
+      return;
+    }
+
+    const missing = [];
+    if (password.length < 8) missing.push("at least 8 characters");
+    if (!/[A-Z]/.test(password)) missing.push("an uppercase letter");
+    if (!/[a-z]/.test(password)) missing.push("a lowercase letter");
+    if (!/\d/.test(password)) missing.push("a digit");
+    if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) missing.push("a special character");
+    if (missing.length) {
+      setPasswordError(`Password must include ${missing.join(", ")}.`);
+      return;
+    }
+
     setFormLoading(true);
 
     try {
@@ -131,6 +156,8 @@ export function TeamManagementView() {
     setPassword("");
     setPermissions(["conduct_interviews", "view_pipeline"]);
     setFormError("");
+    setPasswordError("");
+    setEmailError("");
     setCreatedUser(null);
     setModalOpen(false);
   };
@@ -373,22 +400,46 @@ export function TeamManagementView() {
                       className="input-field"
                       placeholder="sarah@company.com"
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      onChange={(e) => {
+                        setEmail(e.target.value);
+                        if (emailError) setEmailError("");
+                      }}
                       required
                     />
+                    {emailError ? <span className="field-error">{emailError}</span> : null}
                   </div>
 
                   <div className="form-group">
                     <label className="form-label">Password *</label>
-                    <input
-                      type="text"
-                      className="input-field font-mono"
-                      placeholder="Minimum 8 characters (e.g. Employee@123)"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      minLength={8}
-                      required
-                    />
+                    <div className="input-with-icon">
+                      <Lock size={18} className="input-icon" />
+                      <input
+                        type={showPassword ? "text" : "password"}
+                        className="input-field font-mono"
+                        placeholder="Minimum 8 characters (e.g. Employee@123)"
+                        value={password}
+                        onChange={(e) => {
+                          setPassword(e.target.value);
+                          if (passwordError) setPasswordError("");
+                        }}
+                        minLength={8}
+                        autoComplete="new-password"
+                        required
+                      />
+                      <button
+                        type="button"
+                        className="password-toggle-btn"
+                        onClick={() => setShowPassword(!showPassword)}
+                        tabIndex={-1}
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                      >
+                        {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                    {passwordError ? <span className="field-error">{passwordError}</span> : null}
+                    <span className="form-hint">
+                      Must be at least 8 chars with uppercase, lowercase, number &amp; symbol.
+                    </span>
                   </div>
 
                   <div className="form-group">

@@ -52,6 +52,7 @@ export function JobEditor({ job, jobId, mode = "edit", onSave, saving, pendingRe
   const [manualText, setManualText] = useState("");
   const [processing, setProcessing] = useState(false);
   const [processingError, setProcessingError] = useState("");
+  const [formErrors, setFormErrors] = useState({});
 
   function handleLoadProposal() {
     if (!pendingProposed) return;
@@ -70,11 +71,31 @@ export function JobEditor({ job, jobId, mode = "edit", onSave, saving, pendingRe
   }
 
   function update(field, value) {
+    if (formErrors[field]) setFormErrors((current) => ({ ...current, [field]: "" }));
     setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function validateForm() {
+    const errors = {};
+    if (!form.title.trim()) errors.title = "Job drive title is required";
+    if (!form.department.trim()) errors.department = "Department is required";
+    if (!form.location.trim()) errors.location = "Location is required";
+    if (!form.description.trim()) errors.description = "Job description is required";
+    if (!form.education.trim()) errors.education = "Education is required";
+    if (!splitCsv(form.required_skills).length) errors.required_skills = "Enter at least one required skill";
+    const experience = Number(form.experience_years);
+    if (form.experience_years === "" || Number.isNaN(experience) || experience < 0) {
+      errors.experience_years = "Minimum experience must be 0 or more";
+    }
+    return errors;
   }
 
   function submit(event) {
     event.preventDefault();
+    const errors = validateForm();
+    const hasErrors = Object.values(errors).some((message) => message);
+    setFormErrors(errors);
+    if (hasErrors) return;
     onSave({
       ...form,
       experience_years: Number(form.experience_years),
@@ -208,28 +229,30 @@ export function JobEditor({ job, jobId, mode = "edit", onSave, saving, pendingRe
           Job drives are unlimited
         </p>
         <div className="field-grid">
-          <Field label="Job title" value={form.title} onChange={(value) => update("title", value)} />
-          <Field label="Department" value={form.department} onChange={(value) => update("department", value)} />
-          <Field label="Location" value={form.location} onChange={(value) => update("location", value)} />
-          <Field label="Minimum experience" type="number" value={form.experience_years} onChange={(value) => update("experience_years", value)} />
+          <Field label="Job title" required value={form.title} error={formErrors.title} onChange={(value) => update("title", value)} />
+          <Field label="Department" required value={form.department} error={formErrors.department} onChange={(value) => update("department", value)} />
+          <Field label="Location" required value={form.location} error={formErrors.location} onChange={(value) => update("location", value)} />
+          <Field label="Minimum experience" type="number" value={form.experience_years} error={formErrors.experience_years} onChange={(value) => update("experience_years", value)} />
         </div>
         <label className="field full">
-          <span>JD / responsibilities</span>
+          <span>JD / responsibilities <span className="required-mark">*</span></span>
           <textarea value={form.description} onChange={(event) => update("description", event.target.value)} rows={8} />
+          {formErrors.description ? <span className="field-error">{formErrors.description}</span> : null}
         </label>
       </section>
 
       <section className="form-panel">
         <h2>AI Screening</h2>
         <label className="field full">
-          <span>Required skills</span>
+          <span>Required skills <span className="required-mark">*</span></span>
           <textarea value={form.required_skills} onChange={(event) => update("required_skills", event.target.value)} rows={4} />
+          {formErrors.required_skills ? <span className="field-error">{formErrors.required_skills}</span> : null}
         </label>
         <label className="field full">
           <span>Nice to have</span>
           <textarea value={form.nice_to_have_skills} onChange={(event) => update("nice_to_have_skills", event.target.value)} rows={4} />
         </label>
-        <Field label="Education" value={form.education} onChange={(value) => update("education", value)} />
+        <Field label="Education" required value={form.education} error={formErrors.education} onChange={(value) => update("education", value)} />
         <label className="field">
           <span>HR Round Duration (minutes)</span>
           <input type="number" min="3" max="60" value={form.hr_interview_duration || 7} onChange={(event) => update("hr_interview_duration", event.target.value)} />

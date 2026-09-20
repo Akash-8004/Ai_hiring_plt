@@ -139,6 +139,17 @@ button:disabled {
   margin-bottom: 24px;
 }
 
+.topbar-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.topbar-menu-btn,
+.sidebar-close {
+  display: none;
+}
+
 .eyebrow {
   color: #64748b;
   font-size: 13px;
@@ -242,7 +253,6 @@ h3 {
 .form-panel,
 .upload-panel,
 .pipeline-strip,
-.settings-grid,
 .candidate-panel {
   border: 1px solid #e4eaf2;
   border-radius: 8px;
@@ -643,6 +653,17 @@ td span {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
+.field.has-error input,
+.field.has-error textarea {
+  border-color: #b42318;
+}
+
+.required-mark,
+.field span .required-mark {
+  color: inherit;
+  font-weight: 800;
+}
+
 .submit-button {
   width: 100%;
 }
@@ -710,35 +731,6 @@ td span {
 .pipeline-step strong {
   color: #111827;
   font-size: 34px;
-}
-
-.settings-grid {
-  display: grid;
-  gap: 0;
-  overflow: hidden;
-}
-
-.setting-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 18px 20px;
-  border-bottom: 1px solid #edf1f6;
-}
-
-.setting-row:last-child {
-  border-bottom: 0;
-}
-
-.setting-row strong,
-.setting-row span {
-  display: block;
-}
-
-.setting-row span {
-  margin-top: 5px;
-  color: #64748b;
 }
 
 .candidate-panel {
@@ -975,7 +967,7 @@ td span {
     grid-template-columns: 84px minmax(0, 1fr);
   }
 
-  .brand-lockup div:last-child,
+  .brand-titles,
   .nav-item span,
   .tenant-card div {
     display: none;
@@ -1003,14 +995,55 @@ td span {
   }
 
   .sidebar {
-    position: static;
-    display: grid;
-    grid-template-columns: 1fr;
-    height: auto;
-    padding: 14px;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    width: 280px;
+    height: 100vh;
+    padding: 22px 18px;
+    overflow-y: auto;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 1002;
+    box-shadow: 8px 0 30px rgba(15, 23, 42, 0.25);
   }
 
-  .brand-lockup div:last-child,
+  .sidebar.sidebar-mobile-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1001;
+    background: rgba(15, 23, 42, 0.55);
+  }
+
+  .brand-lockup .sidebar-close {
+    display: inline-flex;
+    margin-left: auto;
+    color: #d7deea;
+  }
+
+  .topbar-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .topbar-menu-btn {
+    display: inline-flex;
+  }
+
+  .topbar-actions {
+    display: none;
+  }
+
+  .brand-titles,
   .nav-item span,
   .tenant-card div {
     display: block;
@@ -3195,6 +3228,71 @@ td span {
   border-color: #dbe7ff;
 }
 
+/* ── Super Admin responsive ─────────────────────────────────────────────── */
+
+@media (max-width: 1100px) {
+  .super-admin-main {
+    padding: 20px 18px;
+  }
+
+  .admin-tabs-nav {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 760px) {
+  .super-admin-header {
+    flex-wrap: wrap;
+    gap: 10px 12px;
+    padding: 12px 16px;
+  }
+
+  .super-admin-main {
+    padding: 16px 12px;
+  }
+
+  .admin-tabs-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    border-bottom: none;
+    padding-bottom: 0;
+    margin-bottom: 16px;
+  }
+
+  .admin-tab-btn {
+    justify-content: flex-start;
+    min-width: 0;
+    padding: 10px 12px;
+    font-size: 13px;
+    white-space: normal;
+    text-align: left;
+    border: 1px solid #e4eaf2;
+    background: #ffffff;
+  }
+
+  .header-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .user-email-small {
+    display: none;
+  }
+}
+
+@media (max-width: 380px) {
+  .admin-tabs-nav {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .company-expand-panel .flex-row {
+    flex-wrap: wrap;
+  }
+}
+
 /* ── KPI Grid ────────────────────────────────────────────────────────────── */
 
 .kpi-grid {
@@ -3719,6 +3817,15 @@ td span {
 .form-hint {
   font-size: 11px;
   color: #64748b;
+  margin-top: 3px;
+}
+
+.field-error,
+.field .field-error {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: #b42318;
   margin-top: 3px;
 }
 
@@ -4620,4 +4727,106 @@ td span {
   align-items: center;
   gap: 0.5rem;
   flex-shrink: 0;
+}
+
+
+/* ── Unparseable / Scanned Resume Warning Styles ── */
+.status-badge.unparseable {
+  color: #b45309;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+}
+
+.candidate-name-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.candidate-name-wrap strong {
+  display: inline-block;
+}
+
+.no-text-tag {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 4px;
+  margin-top: 0 !important;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px !important;
+  font-weight: 600;
+  color: #b45309;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  white-space: nowrap;
+}
+
+.upload-accepted-formats {
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  color: #2563eb !important;
+}
+
+.upload-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 480px;
+  padding: 10px 14px;
+  margin-top: 6px;
+  border-radius: 8px;
+  background: #fffbeb;
+  border: 1px solid #fef08a;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.upload-notice svg {
+  flex-shrink: 0;
+  color: #d97706;
+}
+
+.upload-notice span {
+  margin: 0 !important;
+  color: #92400e !important;
+  font-size: 12px !important;
+}
+
+.no-text-warning-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  margin: 16px 0;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  color: #92400e;
+}
+
+.warning-banner-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: #d97706;
+}
+
+.warning-banner-body strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  color: #78350f;
+  margin-bottom: 4px;
+}
+
+.warning-banner-body p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #92400e;
 }

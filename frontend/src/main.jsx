@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import "./styles.css";
 
 import { AuthProvider } from "./components/auth/AuthProvider";
@@ -16,7 +16,6 @@ import { ResumeIntake } from "./components/resumes/ResumeIntake";
 import { Pipeline } from "./components/pipeline/Pipeline";
 import { CandidatePanel } from "./components/candidate/CandidatePanel";
 import { CandidateResumePreview } from "./components/candidate/CandidateResumePreview";
-import { SettingsView } from "./components/settings/SettingsView";
 import { UsageView } from "./components/usage/UsageView";
 import { LoadingScreen } from "./components/common/LoadingScreen";
 import { InterviewApp } from "./components/interview/InterviewApp";
@@ -29,11 +28,21 @@ import { TermsPage } from "./components/marketing/TermsPage";
 import { useAuth } from "./hooks/useAuth";
 import { apiFetchJson } from "./utils/api";
 
+/* ── BUG 33 fix: map URL segment ↔ view key ─────────────────────────────── */
+const VALID_VIEWS = ["dashboard", "job", "resumes", "pipeline", "usage", "team"];
+
+function viewFromPath(pathname) {
+  // pathname expected: /app/pipeline  →  "pipeline"
+  const seg = pathname.replace(/^\/app\/?/, "").split("/")[0];
+  return VALID_VIEWS.includes(seg) ? seg : "dashboard";
+}
+
 function App() {
   const { user, role, hasPermission } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [workspace, setWorkspace] = useState(null);
   const [activeJobId, setActiveJobId] = useState(null);
-  const [activeView, setActiveView] = useState("dashboard");
   const [jobEditorMode, setJobEditorMode] = useState("edit");
   const [statusFilter, setStatusFilter] = useState("All");
   const [query, setQuery] = useState("");
@@ -42,6 +51,15 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // BUG 33: derive active view from the URL instead of local state
+  const activeView = viewFromPath(location.pathname);
+
+  const handleViewChange = (nextView) => {
+    navigate(`/app/${nextView}`);
+    setMenuOpen(false);
+  };
 
   async function refresh(jobId = activeJobId) {
     setError("");
@@ -86,7 +104,7 @@ function App() {
         );
       }
       setJobEditorMode("edit");
-      setActiveView("dashboard");
+      navigate("/app/dashboard");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -128,12 +146,12 @@ function App() {
 
   function openCreateDrive() {
     setJobEditorMode("create");
-    setActiveView("job");
+    navigate("/app/job");
   }
 
   function openEditDrive(jobId) {
     setJobEditorMode("edit");
-    switchDrive(jobId).then(() => setActiveView("job"));
+    switchDrive(jobId).then(() => navigate("/app/job"));
   }
 
   async function addManualResume(payload) {
@@ -146,7 +164,7 @@ function App() {
       });
       setWorkspace(data);
       setActiveJobId(data.job_id || null);
-      setActiveView("dashboard");
+      navigate("/app/dashboard");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -156,6 +174,14 @@ function App() {
 
   async function uploadFiles(files) {
     if (!files.length) return;
+    const allowed = [".pdf", ".docx", ".txt"];
+    const invalid = Array.from(files).find(
+      (f) => !allowed.some((ext) => (f.name || "").toLowerCase().endsWith(ext))
+    );
+    if (invalid) {
+      setError(`Unsupported file type for "${invalid.name}". Only PDF, DOCX, and TXT files are accepted.`);
+      return;
+    }
     setSaving(true);
     setError("");
     const form = new FormData();
@@ -167,7 +193,7 @@ function App() {
       });
       setWorkspace(data);
       setActiveJobId(data.job_id || null);
-      setActiveView("dashboard");
+      navigate("/app/dashboard");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -272,15 +298,18 @@ function App() {
     <div className="app-shell">
       <Sidebar
         activeView={effectiveView}
-        onViewChange={setActiveView}
+        onViewChange={handleViewChange}
         company={workspace?.company}
         drives={drives}
         activeJobId={activeJobId}
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
       />
       <main className="main-panel">
         <Topbar
           title={titleFor(effectiveView)}
           company={workspace?.company}
+          onMenuClick={() => setMenuOpen(true)}
         />
 
         {error ? <div className="notice error">{error}</div> : null}
@@ -296,7 +325,7 @@ function App() {
             onCandidate={setSelectedCandidate}
             onViewDetails={setPreviewCandidate}
             onGoToJob={canManageJobs ? (activeJobId ? () => openEditDrive(activeJobId) : openCreateDrive) : undefined}
-            onGoToUpload={canManageResumes ? () => setActiveView("resumes") : undefined}
+            onGoToUpload={canManageResumes ? () => navigate("/app/resumes") : undefined}
             {...driveProps}
           />
         )}
@@ -339,8 +368,6 @@ function App() {
         {effectiveView === "team" && <TeamManagementView />}
 
         {effectiveView === "usage" && <UsageView />}
-
-        {effectiveView === "settings" && <SettingsView />}
       </main>
 
       {selectedCandidate ? (
@@ -361,7 +388,6 @@ function titleFor(view) {
     pipeline: "Hiring Pipeline",
     team: "Team Access Management",
     usage: "Usage & Credits",
-    settings: "Workspace Settings",
   }[view] || "Workspace";
 }
 
@@ -386,7 +412,12 @@ function ProtectedApp() {
   if (loading) return <LoadingScreen />;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (role === "super_admin") return <SuperAdminDashboard />;
-  return <App />;
+  return (
+    <Routes>
+      <Route path="/" element={<Navigate to="/app/dashboard" replace />} />
+      <Route path="/*" element={<App />} />
+    </Routes>
+  );
 }
 
 function InterviewGate({ children }) {

@@ -7,10 +7,10 @@ import {
   Gauge,
   LayoutDashboard,
   LogOut,
-  Settings,
   Sparkles,
   Upload,
   Users,
+  X,
 } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
 
@@ -20,6 +20,8 @@ export function Sidebar({
   company,
   drives = [],
   activeJobId,
+  open = false,
+  onClose = () => {},
 }) {
   const { user, role, logout, hasPermission } = useAuth();
   const [planOpen, setPlanOpen] = useState(false);
@@ -44,17 +46,25 @@ export function Sidebar({
     ...(hasPermission("view_pipeline") ? [["pipeline", BarChart3, "Pipeline"]] : []),
     ...(isCompanyAdmin || hasPermission("view_usage") ? [["usage", Gauge, "Usage"]] : []),
     ...(isCompanyAdmin ? [["team", Users, "Team Access"]] : []),
-    ["settings", Settings, "Settings"],
   ];
 
   return (
-    <aside className="sidebar">
+    <>
+    <aside className={`sidebar ${open ? "sidebar-mobile-open" : ""}`}>
       <div className="brand-lockup">
         <div className="brand-mark"><Sparkles size={19} /></div>
-        <div>
+        <div className="brand-titles">
           <strong>AI Hiring SaaS</strong>
           <span>Enterprise Portal</span>
         </div>
+        <button
+          type="button"
+          className="btn-icon sidebar-close"
+          onClick={onClose}
+          title="Close navigation menu"
+        >
+          <X size={16} />
+        </button>
       </div>
 
       <nav className="nav-list">
@@ -147,5 +157,7 @@ export function Sidebar({
         </div>
       </div>
     </aside>
+      {open && <div className="sidebar-backdrop" onClick={onClose} />}
+    </>
   );
 }

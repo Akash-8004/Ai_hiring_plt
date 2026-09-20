@@ -20,6 +20,46 @@ class AIRankingService:
         self.last_error = ""
 
     def rank_resume(self, resume: ParsedResume, job: JobDescription) -> ResumeScore:
+        if resume.parsing_provider == "none" or (resume.raw_text or "").startswith("[NO_TEXT_EXTRACTED]"):
+            return ResumeScore(
+                total_score=0,
+                recommendation="Review / Reject",
+                matched_skills=[],
+                missing_skills=list(job.required_skills),
+                breakdown={
+                    "Skill Match": 0,
+                    "Experience Match": 0,
+                    "Education Match": 0,
+                    "Keyword Match": 0,
+                    "Semantic Match": 0,
+                },
+                summary=f"No readable text could be extracted from {resume.file_name}. Please re-upload a text-based document.",
+            )
+
+        # BUG 39: Refuse to score when the JD has no description *and* no
+        # required skills — scoring against empty criteria produces misleading
+        # 100% matches and makes shortlisting meaningless.
+        jd_description_empty = not (job.description or "").strip()
+        jd_skills_empty = not any(s.strip() for s in (job.required_skills or []))
+        if jd_description_empty and jd_skills_empty:
+            return ResumeScore(
+                total_score=0,
+                recommendation="Review / Reject",
+                matched_skills=[],
+                missing_skills=[],
+                breakdown={
+                    "Skill Match": 0,
+                    "Experience Match": 0,
+                    "Education Match": 0,
+                    "Keyword Match": 0,
+                    "Semantic Match": 0,
+                },
+                summary=(
+                    "Cannot score: the job drive has no description or required skills. "
+                    "Please complete the job description before screening candidates."
+                ),
+            )
+
         if self.provider == "gemini" and self.api_key:
             try:
                 self.last_provider_used = "gemini"
@@ -83,7 +123,7 @@ class AIRankingService:
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
-                "temperature": 0.15,
+                "temperature": 0.0,
                 "responseMimeType": "application/json",
             },
         }
@@ -187,6 +227,7 @@ Return only valid JSON using this exact schema:
 }}
 
 Rules:
+- Score deterministically following the rubric exactly.
 - total_score must be 0 to 100.
 - recommendation must be "Shortlist" when total_score is at least {job.threshold}; otherwise "Review / Reject".
 - matched_skills and missing_skills should focus on required JD skills.

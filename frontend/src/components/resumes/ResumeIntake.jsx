@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { FileText, Loader2, Upload } from "lucide-react";
+import { FileText, Info, Loader2, Upload } from "lucide-react";
 import { Field } from "../common/Field";
 
 export function ResumeIntake({ onManualResume, onUpload, saving }) {
@@ -18,7 +18,11 @@ export function ResumeIntake({ onManualResume, onUpload, saving }) {
         <div className="upload-drop">
           <Upload size={32} />
           <strong>Bulk Resume Upload</strong>
-          <span>TXT, PDF, DOCX</span>
+          <span className="upload-accepted-formats">Supported formats: Text-based PDF, DOCX, TXT</span>
+          <div className="upload-notice">
+            <Info size={14} />
+            <span>Files must contain selectable text. Scanned / image-only PDFs without an embedded text layer will be flagged as unparseable.</span>
+          </div>
           <input
             type="file"
             multiple

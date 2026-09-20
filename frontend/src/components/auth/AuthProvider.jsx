@@ -1,5 +1,5 @@
-import React, { createContext, useCallback, useEffect, useState } from "react";
-import { apiFetch, apiFetchJson } from "../../utils/api";
+import React, { createContext, useCallback, useEffect, useRef, useState } from "react";
+import { apiFetch, apiFetchJson, resetUnauthorizedFlag } from "../../utils/api";
 
 export const AuthContext = createContext(null);
 
@@ -10,7 +10,24 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [sessionError, setSessionError] = useState("");
 
+  // BUG 26: In-flight guard so logout() is a singleton
+  const logoutInProgress = useRef(false);
+
+  const clearLocalAuth = useCallback(() => {
+    localStorage.removeItem("ai_hiring_access_token");
+    localStorage.removeItem("ai_hiring_refresh_token");
+    setToken(null);
+    setRefreshToken(null);
+    setUser(null);
+  }, []);
+
   const logout = useCallback(async () => {
+    // BUG 26: If already logging out, just clear local state
+    if (logoutInProgress.current) {
+      clearLocalAuth();
+      return;
+    }
+    logoutInProgress.current = true;
     try {
       if (token) {
         await apiFetch("/api/auth/logout", { method: "POST" });
@@ -18,16 +35,15 @@ export function AuthProvider({ children }) {
     } catch {
       // Ignore logout failure
     } finally {
-      localStorage.removeItem("ai_hiring_access_token");
-      localStorage.removeItem("ai_hiring_refresh_token");
-      setToken(null);
-      setRefreshToken(null);
-      setUser(null);
+      clearLocalAuth();
+      logoutInProgress.current = false;
     }
-  }, [token]);
+  }, [token, clearLocalAuth]);
 
   const login = async (email, password) => {
     setSessionError("");
+    // Reset the 401 dedup flag on fresh login
+    resetUnauthorizedFlag();
     const data = await apiFetchJson("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
@@ -59,18 +75,21 @@ export function AuthProvider({ children }) {
             body: JSON.stringify({ refresh_token: refreshToken }),
           });
           localStorage.setItem("ai_hiring_access_token", refreshed.access_token);
+          localStorage.setItem("ai_hiring_refresh_token", refreshed.refresh_token);
           setToken(refreshed.access_token);
+          setRefreshToken(refreshed.refresh_token);
           setUser(refreshed.user);
           return;
         } catch {
-          // Refresh failed
+          // Refresh failed — do silent local logout (token is already invalid)
         }
       }
-      logout();
+      // BUG 26: Silent logout — just clear local state, no API call
+      clearLocalAuth();
     } finally {
       setLoading(false);
     }
-  }, [token, refreshToken, logout]);
+  }, [token, refreshToken, clearLocalAuth]);
 
   useEffect(() => {
     fetchCurrentUser();

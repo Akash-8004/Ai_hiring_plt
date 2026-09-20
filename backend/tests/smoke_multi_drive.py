@@ -27,7 +27,7 @@ def _auth(email: str, password: str) -> dict:
     return {"Authorization": f"Bearer {_login(email, password)}"}
 
 
-def _job_payload(title: str, job_id=None) -> dict:
+def _job_payload(title: str, job_id=None, **overrides) -> dict:
     d = {
         "title": title,
         "department": "Eng",
@@ -44,6 +44,7 @@ def _job_payload(title: str, job_id=None) -> dict:
     }
     if job_id is not None:
         d["job_id"] = job_id
+    d.update(overrides)
     return d
 
 
@@ -53,7 +54,7 @@ def test_multi_drive_smoke():
         os.getenv("SUPER_ADMIN_PASSWORD", "Admin@123456"),
     )
     suffix = uuid4().hex[:8]
-    admin_email = f"driveadmin{suffix}@test.com"
+    admin_email = f"DriveAdmin{suffix}@Test.COM"
     admin_pass = "Admin@123456"
 
     r = client.post(
@@ -70,7 +71,44 @@ def test_multi_drive_smoke():
     )
     assert r.status_code == 200, r.text
     company_id = r.json()["company_id"]
-    admin_headers = _auth(admin_email, admin_pass)
+
+    # Email login must be case-insensitive: stored lowercase, any casing works.
+    admin_headers = _auth(admin_email.lower(), admin_pass)
+    admin_headers_mixed = _auth(f"dRiVeAdMiN{suffix}@tEsT.cOm", admin_pass)
+    for headers in (admin_headers, admin_headers_mixed):
+        r = client.get("/api/auth/me", headers=headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["email"] == admin_email.lower()
+
+    # Duplicate detection must be case-insensitive too.
+    r = client.post(
+        "/api/admin/companies",
+        headers=sa_headers,
+        json={
+            "company_name": f"DriveTest Dupe {suffix}",
+            "contact_email": f"dupe{suffix}@test.com",
+            "plan": "starter",
+            "admin_email": admin_email.upper(),
+            "admin_name": "Drive Admin",
+            "admin_password": admin_pass,
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert "Admin email already in use" in r.json()["detail"]
+
+    blank_payloads = [
+        _job_payload(""),
+        _job_payload("   "),
+        _job_payload("Good", department=" "),
+        _job_payload("Good", location=""),
+        _job_payload("Good", education="  "),
+        _job_payload("Good", description=""),
+        _job_payload("Good", required_skills=[]),
+    ]
+    for payload in blank_payloads:
+        r = client.put("/api/job", headers=admin_headers, json=payload)
+        assert r.status_code == 422, r.text
+    assert database.count_jobs(company_id) == 0
 
     job_ids = []
     for i in range(3):

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { X, Building2, User, Mail, Lock, Shield, CheckCircle, Copy, Phone, Loader2 } from "lucide-react";
+import React, { useState, useEffect, useRef } from "react";
+import { X, Building2, User, Mail, Lock, Shield, CheckCircle, Copy, Phone, Loader2, Eye, EyeOff } from "lucide-react";
 import { apiFetchJson } from "../../utils/api";
 
 export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, initialData, leadId, onLeadConverted }) {
@@ -14,10 +14,15 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, init
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [contactEmailError, setContactEmailError] = useState("");
+  const [adminEmailError, setAdminEmailError] = useState("");
   const [successData, setSuccessData] = useState(null);
   const [copied, setCopied] = useState(false);
   const [emailSending, setEmailSending] = useState(false);
   const [emailSent, setEmailSent] = useState(null);
+  const sendingRef = useRef(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -38,6 +43,31 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, init
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+    setPasswordError("");
+    setContactEmailError("");
+    setAdminEmailError("");
+
+    const emailPattern = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+    if (!emailPattern.test(contactEmail.trim())) {
+      setContactEmailError("Invalid email address");
+      return;
+    }
+    if (!emailPattern.test(adminEmail.trim())) {
+      setAdminEmailError("Invalid email address");
+      return;
+    }
+
+    const missing = [];
+    if (adminPassword.length < 8) missing.push("at least 8 characters");
+    if (!/[A-Z]/.test(adminPassword)) missing.push("an uppercase letter");
+    if (!/[a-z]/.test(adminPassword)) missing.push("a lowercase letter");
+    if (!/\d/.test(adminPassword)) missing.push("a digit");
+    if (!/[!@#$%^&*(),.?":{}|<>]/.test(adminPassword)) missing.push("a special character");
+    if (missing.length) {
+      setPasswordError(`Password must include ${missing.join(", ")}.`);
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -99,6 +129,9 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, init
 
   const handleSendCredentialsEmail = async () => {
     if (!successData) return;
+    // BUG 21: In-flight guard to prevent duplicate sends on rapid clicks
+    if (sendingRef.current) return;
+    sendingRef.current = true;
     setEmailSending(true);
     setEmailSent(null);
     try {
@@ -117,6 +150,7 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, init
       setEmailSent("failed");
     } finally {
       setEmailSending(false);
+      sendingRef.current = false;
     }
   };
 
@@ -131,6 +165,9 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, init
     setAdminPassword("");
     setSuccessData(null);
     setError("");
+    setPasswordError("");
+    setContactEmailError("");
+    setAdminEmailError("");
     onClose();
   };
 
@@ -246,9 +283,13 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, init
                     className="input-field"
                     placeholder="contact@company.com"
                     value={contactEmail}
-                    onChange={(e) => setContactEmail(e.target.value)}
+                    onChange={(e) => {
+                      setContactEmail(e.target.value);
+                      if (contactEmailError) setContactEmailError("");
+                    }}
                     required
                   />
+                  {contactEmailError ? <span className="field-error">{contactEmailError}</span> : null}
                 </div>
                 <div className="form-group">
                   <label className="form-label">Contact Phone</label>
@@ -321,23 +362,44 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, init
                     className="input-field"
                     placeholder="admin@company.com"
                     value={adminEmail}
-                    onChange={(e) => setAdminEmail(e.target.value)}
+                    onChange={(e) => {
+                      setAdminEmail(e.target.value);
+                      if (adminEmailError) setAdminEmailError("");
+                    }}
                     required
                   />
+                  {adminEmailError ? <span className="field-error">{adminEmailError}</span> : null}
                 </div>
               </div>
 
               <div className="form-group">
                 <label className="form-label">Initial Password *</label>
-                <input
-                  type="text"
-                  className="input-field font-mono"
-                  placeholder="Minimum 8 characters (e.g. Company@123)"
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  minLength={8}
-                  required
-                />
+                <div className="input-with-icon">
+                  <Lock size={18} className="input-icon" />
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    className="input-field font-mono"
+                    placeholder="Minimum 8 characters (e.g. Company@123)"
+                    value={adminPassword}
+                    onChange={(e) => {
+                      setAdminPassword(e.target.value);
+                      if (passwordError) setPasswordError("");
+                    }}
+                    minLength={8}
+                    autoComplete="new-password"
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle-btn"
+                    onClick={() => setShowPassword(!showPassword)}
+                    tabIndex={-1}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+                {passwordError ? <span className="field-error">{passwordError}</span> : null}
                 <span className="form-hint">
                   Must be at least 8 chars with uppercase, lowercase, number & symbol.
                 </span>

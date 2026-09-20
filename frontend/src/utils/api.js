@@ -4,6 +4,13 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
+// BUG 26: Module-level dedup — only the FIRST 401 triggers logout
+let _unauthorizedFired = false;
+
+export function resetUnauthorizedFlag() {
+  _unauthorizedFired = false;
+}
+
 export async function apiFetch(path, options = {}) {
   const token = localStorage.getItem("ai_hiring_access_token");
 
@@ -22,8 +29,15 @@ export async function apiFetch(path, options = {}) {
   });
 
   if (response.status === 401) {
-    // If not on login or public interview page, trigger logout event
-    if (!path.includes("/api/auth/login") && !path.includes("/api/interview/session")) {
+    // BUG 26: Exclude login, interview, logout, and refresh from triggering global logout
+    if (
+      !path.includes("/api/auth/login") &&
+      !path.includes("/api/interview/session") &&
+      !path.includes("/api/auth/logout") &&
+      !path.includes("/api/auth/refresh") &&
+      !_unauthorizedFired
+    ) {
+      _unauthorizedFired = true;
       window.dispatchEvent(new CustomEvent("auth:unauthorized"));
     }
   }
