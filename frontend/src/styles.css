@@ -146,8 +146,10 @@ button:disabled {
 }
 
 .topbar-menu-btn,
-.sidebar-close {
-  display: none;
+.sidebar-close,
+.topbar-head .topbar-menu-btn,
+.brand-lockup .sidebar-close {
+  display: none !important;
 }
 
 .eyebrow {
@@ -1024,7 +1026,7 @@ td span {
   }
 
   .brand-lockup .sidebar-close {
-    display: inline-flex;
+    display: inline-flex !important;
     margin-left: auto;
     color: #d7deea;
   }
@@ -1035,8 +1037,9 @@ td span {
     gap: 12px;
   }
 
-  .topbar-menu-btn {
-    display: inline-flex;
+  .topbar-menu-btn,
+  .topbar-head .topbar-menu-btn {
+    display: inline-flex !important;
   }
 
   .topbar-actions {
@@ -2269,6 +2272,19 @@ td span {
 .notice.info {
   color: #1d4ed8;
   background: #eff6ff;
+}
+
+/* Dismissible notice: message on the left, action pinned right. */
+.access-changed-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 600;
+}
+
+.access-changed-notice .text-button {
+  flex-shrink: 0;
 }
 
 .transcript-question {

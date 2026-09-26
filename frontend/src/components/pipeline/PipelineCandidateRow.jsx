@@ -1,6 +1,8 @@
-import React from "react";
-import { CheckCircle2, Send, XCircle } from "lucide-react";
+import React, { useState } from "react";
+import { createPortal } from "react-dom";
+import { CheckCircle2, Send, ShieldAlert, XCircle } from "lucide-react";
 import { CopyButton } from "../common/CopyButton";
+import { OverrideReasonDialog } from "./OverrideReasonDialog";
 
 function expiryLabel(invitation) {
   if (!invitation?.expires_at) return null;
@@ -8,15 +10,65 @@ function expiryLabel(invitation) {
   return <small className={date <= new Date() ? "deadline-expired" : "invite-expiry"}>Expires: {date.toLocaleString()}</small>;
 }
 
+/** Badges for any pipeline gates this candidate was waved past by an admin. */
+function OverrideBadges({ overrides }) {
+  if (!overrides?.length) return null;
+  return (
+    <div className="invite-link-stack">
+      {overrides.map((entry, index) => (
+        <span
+          key={`${entry.round}-${index}`}
+          className="status-badge invited"
+          title={`${entry.reason_label || entry.reason}${entry.note ? ` — ${entry.note}` : ""} · by ${entry.by_email || "unknown"}`}
+        >
+          <ShieldAlert size={13} />
+          {entry.round === "hr" ? "HR override" : "Tech override"}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export function PipelineCandidateRow({ candidate, onInvite, canInvite = false, busy, techLocked = false, hrDeadlineSet = false, technicalDeadlineSet = false }) {
+  const [overridePrompt, setOverridePrompt] = useState(null);
   const hrInvitation = candidate.hr_invitation;
   const hrInterview = candidate.hr_interview || {};
   const invitation = candidate.invitation;
   const techInterview = candidate.technical_interview || {};
   const emailSent = candidate.email_sent || {};
+  const overrides = candidate.overrides || [];
 
   const hrEmailSent = !!emailSent.hr;
   const techEmailSent = !!emailSent.technical;
+
+  // A round is an override when the candidate did not clear the gate that
+  // normally guards it. The backend requires a reason for exactly these.
+  const hrNeedsOverride = candidate.Status !== "Shortlisted";
+  const techNeedsOverride = hrInterview.decision === "FAIL";
+
+  const inviteDirect = (type) => onInvite(candidate.Email, type);
+  const confirmOverride = async ({ reason, note }) => {
+    const type = overridePrompt.type;
+    setOverridePrompt(null);
+    await onInvite(candidate.Email, type, { reason, note });
+  };
+
+  const inviteButton = (type, label) => {
+    const needsOverride = type === "hr" ? hrNeedsOverride : techNeedsOverride;
+    const deadlineSet = type === "hr" ? hrDeadlineSet : technicalDeadlineSet;
+    if (!canInvite) return <span className="muted-cell">Awaiting invite</span>;
+    return (
+      <button
+        className="secondary-button"
+        onClick={() => (needsOverride ? setOverridePrompt({ type }) : inviteDirect(type))}
+        disabled={busy || !deadlineSet}
+        title={needsOverride ? "This candidate did not clear the gate — a reason will be required" : undefined}
+      >
+        <Send size={15} />
+        {label}
+      </button>
+    );
+  };
 
   // --- HR Invitation Cell ---
   let hrInviteCell;
@@ -49,16 +101,9 @@ export function PipelineCandidateRow({ candidate, onInvite, canInvite = false, b
       </div>
     );
   } else if (candidate.Status === "Shortlisted") {
-    hrInviteCell = canInvite ? (
-      <button className="secondary-button" onClick={() => onInvite(candidate.Email, "hr")} disabled={busy || !hrDeadlineSet}>
-        <Send size={15} />
-        Invite
-      </button>
-    ) : (
-      <span className="muted-cell">Awaiting invite</span>
-    );
+    hrInviteCell = inviteButton("hr", "Invite");
   } else {
-    hrInviteCell = canInvite ? <button className="secondary-button" onClick={() => onInvite(candidate.Email, "hr")} disabled={busy || !hrDeadlineSet}><Send size={15} />Still Invite</button> : <span className="muted-cell">Not shortlisted</span>;
+    hrInviteCell = inviteButton("hr", "Still Invite");
   }
 
   // --- HR Result Cell ---
@@ -117,30 +162,41 @@ export function PipelineCandidateRow({ candidate, onInvite, canInvite = false, b
   } else if (techLocked) {
     techCell = <span className="muted-cell">Unlocks after HR deadline</span>;
   } else if (hrInterview.decision === "PASS") {
-    techCell = canInvite ? (
-      <button className="secondary-button" onClick={() => onInvite(candidate.Email, "technical")} disabled={busy || !technicalDeadlineSet}>
-        <Send size={15} />
-        Invite Tech
-      </button>
-    ) : (
-      <span className="muted-cell">Awaiting invite</span>
-    );
+    techCell = inviteButton("technical", "Invite Tech");
   } else if (hrInterview.decision === "FAIL") {
-    techCell = canInvite ? <button className="secondary-button" onClick={() => onInvite(candidate.Email, "technical")} disabled={busy || !technicalDeadlineSet}><Send size={15} />Still Invite</button> : <span className="muted-cell">Pending HR pass</span>;
+    techCell = inviteButton("technical", "Still Invite");
   } else {
     techCell = <span className="muted-cell">Pending HR pass</span>;
   }
 
   return (
-    <tr>
-      <td>
-        <strong>{candidate.Name}</strong>
-        <span>{candidate.Email}</span>
-      </td>
-      <td>{candidate.Score}%</td>
-      <td>{hrInviteCell}</td>
-      <td>{hrResultCell}</td>
-      <td>{techCell}</td>
-    </tr>
+    <>
+      <tr>
+        <td>
+          <strong>{candidate.Name}</strong>
+          <span>{candidate.Email}</span>
+          <OverrideBadges overrides={overrides} />
+        </td>
+        <td>{candidate.Score}%</td>
+        <td>{hrInviteCell}</td>
+        <td>{hrResultCell}</td>
+        <td>{techCell}</td>
+      </tr>
+
+      {/* Portalled to <body>: a fixed-position overlay is invalid inside <tr>/<tbody>. */}
+      {overridePrompt
+        ? createPortal(
+            <OverrideReasonDialog
+              candidateName={candidate.Name || candidate.Email}
+              round={overridePrompt.type}
+              gateLabel={overridePrompt.type === "hr" ? "resume screening" : "the HR round"}
+              onConfirm={confirmOverride}
+              onClose={() => setOverridePrompt(null)}
+              busy={busy}
+            />,
+            document.body
+          )
+        : null}
+    </>
   );
 }

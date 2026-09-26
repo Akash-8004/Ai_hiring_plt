@@ -4,6 +4,7 @@ the AI_Hiring Gemini Live integration.
 """
 
 from backend.core.models import JobDescription, ParsedResume
+from backend.core.sanitizer import sanitize_for_prompt as _sanitize
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +212,7 @@ Education: {resume.education}
 Detected skills: {", ".join(resume.skills)}
 
 RESUME TEXT:
-{resume.raw_text[:6000]}
+{_sanitize(resume.raw_text, max_length=6000)}
 
 INTERVIEW STRUCTURE ({duration} minutes total):
 1. WARM OPENING ({fmt(opening_s)}): Greet the candidate warmly by name, introduce yourself as Priya from the HR team, and ask them to briefly introduce themselves.

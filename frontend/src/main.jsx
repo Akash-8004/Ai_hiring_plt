@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import "./styles.css";
@@ -38,7 +38,7 @@ function viewFromPath(pathname) {
 }
 
 function App() {
-  const { user, role, hasPermission } = useAuth();
+  const { user, role, hasPermission, refreshProfile, accessChanged, clearAccessChanged, permissions } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [workspace, setWorkspace] = useState(null);
@@ -55,6 +55,23 @@ function App() {
 
   // BUG 33: derive active view from the URL instead of local state
   const activeView = viewFromPath(location.pathname);
+
+  // Revalidate permissions on navigation. This lives here rather than in
+  // AuthProvider because the provider is mounted above <BrowserRouter> and so
+  // cannot use useLocation. Debounced so a burst of navigation collapses into
+  // one request, and skipped on the first render because the provider's
+  // mount-time /api/auth/me already covers it.
+  const isFirstRender = useRef(true);
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    const timer = setTimeout(() => {
+      refreshProfile();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [location.pathname, refreshProfile]);
 
   const handleViewChange = (nextView) => {
     navigate(`/app/${nextView}`);
@@ -215,12 +232,18 @@ function App() {
     }
   }
 
-  async function inviteCandidate(email, interviewType = "technical") {
+  async function inviteCandidate(email, interviewType = "technical", override = null) {
     setSaving(true);
     setError("");
     try {
+      const params = new URLSearchParams({
+        interview_type: interviewType,
+        send_email: "true",
+      });
+      if (override?.reason) params.set("override_reason", override.reason);
+      if (override?.note) params.set("override_note", override.note);
       const data = await apiFetchJson(
-        `/api/candidates/${encodeURIComponent(email)}/invite?interview_type=${interviewType}&send_email=true`,
+        `/api/candidates/${encodeURIComponent(email)}/invite?${params.toString()}`,
         { method: "POST" }
       );
       setWorkspace(data);
@@ -313,6 +336,23 @@ function App() {
         />
 
         {error ? <div className="notice error">{error}</div> : null}
+
+        {accessChanged ? (
+          <div className="notice info access-changed-notice">
+            <span>Your access was updated by an administrator. Menu items you no longer have permission for have been removed.</span>
+            <button type="button" className="text-button" onClick={clearAccessChanged}>
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+
+        {/* Zero permissions: viewAllowed would silently bounce every nav here,
+            which reads as breakage rather than an access change. */}
+        {isCompanyAdmin || permissions.length > 0 ? null : (
+          <div className="notice error">
+            Your account has no permissions assigned. Contact your company administrator to restore access.
+          </div>
+        )}
 
         {effectiveView === "dashboard" && (
           <Dashboard

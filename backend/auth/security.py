@@ -131,6 +131,30 @@ def decode_token(token: str) -> dict[str, Any]:
         )
 
 
+# ── Authorization error codes ───────────────────────────────────────────────
+# A 403 alone is not machine-actionable: this module also raises 403 for
+# account/company suspension, and the rest of the codebase uses 403 for
+# business-rule locks (e.g. "Technical round unlocks after the HR deadline
+# passes"). Clients that need to react to a *permission* change specifically
+# (to revalidate a cached profile) must key off the code, never the status.
+PERMISSION_DENIED = "permission_denied"
+ACCOUNT_SUSPENDED = "account_suspended"
+COMPANY_SUSPENDED = "company_suspended"
+
+
+def _forbidden(code: str, message: str) -> HTTPException:
+    """Build a 403 carrying a machine-readable code.
+
+    The human-readable ``message`` is kept identical to the previous bare-string
+    response so existing UI error text and any string matching stay valid;
+    ``apiFetchJson`` unwraps ``{code, message}`` into ``err.code`` / ``err.message``.
+    """
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"code": code, "message": message},
+    )
+
+
 # ── FastAPI Dependencies ────────────────────────────────────────────────────
 
 async def get_current_user(
@@ -171,9 +195,9 @@ async def get_current_user(
         )
 
     if user.get("status") != "active":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account suspended. Contact your administrator.",
+        raise _forbidden(
+            ACCOUNT_SUSPENDED,
+            "Account suspended. Contact your administrator.",
         )
 
     # Session binding: an access token is only valid while it belongs to the
@@ -191,9 +215,9 @@ async def get_current_user(
     if user.get("role") != "super_admin" and user.get("company_id"):
         company = database.get_company_by_id(user["company_id"])
         if not company or company.get("status") != "active":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Company account suspended. Contact platform administrator.",
+            raise _forbidden(
+                COMPANY_SUSPENDED,
+                "Company account suspended. Contact platform administrator.",
             )
 
     user.pop("password_hash", None)
@@ -244,9 +268,9 @@ def require_permission(*required: str):
             return user
         missing = [p for p in required if p not in perms]
         if missing:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to perform this action.",
+            raise _forbidden(
+                PERMISSION_DENIED,
+                "You do not have permission to perform this action.",
             )
         return user
 
@@ -258,9 +282,9 @@ async def require_job_manage(user: dict = Depends(get_current_user)) -> dict:
     perms = user.get("permissions", []) or []
     if role in ("super_admin", "company_admin") or "manage_jobs" in perms or "*" in perms:
         return user
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="You do not have permission to perform this action.",
+    raise _forbidden(
+        PERMISSION_DENIED,
+        "You do not have permission to perform this action.",
     )
 
 
@@ -269,9 +293,9 @@ async def require_drive_delete(user: dict = Depends(get_current_user)) -> dict:
     perms = user.get("permissions", []) or []
     if role in ("super_admin", "company_admin") or "manage_drive_delete" in perms or "manage_jobs" in perms or "*" in perms:
         return user
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="You do not have permission to perform this action.",
+    raise _forbidden(
+        PERMISSION_DENIED,
+        "You do not have permission to perform this action.",
     )
 
 

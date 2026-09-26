@@ -6,6 +6,7 @@ import urllib.request
 
 from backend.config import load_env
 from backend.core.models import JobDescription, ParsedResume, ResumeScore
+from backend.core.sanitizer import sanitize_for_prompt as _sanitize
 
 
 class AIRankingService:
@@ -250,7 +251,7 @@ Education: {resume.education}
 Detected skills: {", ".join(resume.skills)}
 
 Resume text:
-{resume.raw_text[:7000]}
+{_sanitize(resume.raw_text, max_length=7000)}
 """.strip()
 
 

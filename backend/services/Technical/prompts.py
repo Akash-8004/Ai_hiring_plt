@@ -4,6 +4,7 @@ the AI_Hiring Gemini Live integration.
 """
 
 from backend.core.models import JobDescription, ParsedResume
+from backend.core.sanitizer import sanitize_for_prompt as _sanitize
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +198,7 @@ Education: {resume.education}
 Detected skills: {", ".join(resume.skills)}
 
 RESUME TEXT:
-{resume.raw_text[:6000]}
+{_sanitize(resume.raw_text, max_length=6000)}
 
 {structure}
 {custom_questions}

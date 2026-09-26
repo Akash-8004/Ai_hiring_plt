@@ -83,7 +83,9 @@ export function PricingPage() {
           const merged = data.plans.map((p) => {
             const fallback = FALLBACK_PLANS.find((f) => f.id === p.id);
             return {
+              ...fallback,
               ...p,
+              price: p.price ?? fallback?.price ?? null,
               desc: fallback?.desc || "Complete AI hiring suite with full feature access.",
             };
           });
@@ -96,7 +98,7 @@ export function PricingPage() {
   function getDisplayedPrice(price) {
     if (price == null || price === "") return "Custom";
     const num = Number(price);
-    const finalPrice = isAnnual ? Math.round(num * 0.8) : num;
+    const finalPrice = isAnnual ? num * 12 : num;
     return `$${finalPrice.toLocaleString()}`;
   }
 
@@ -138,7 +140,6 @@ export function PricingPage() {
         >
           Annual Billing
         </span>
-        <span className="mkt-discount-badge">Save 20%</span>
       </div>
 
       {/* ── Pricing Cards Grid ──────────────────────────────────────────── */}
@@ -164,7 +165,7 @@ export function PricingPage() {
 
                 <div className="mkt-pricing-price">
                   {getDisplayedPrice(plan.price)}
-                  {plan.price != null && <span> / month</span>}
+                  {plan.price != null && <span> / {isAnnual ? "year" : "month"}</span>}
                 </div>
 
                 <ul className="mkt-pricing-features">

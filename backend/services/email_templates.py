@@ -2,10 +2,16 @@
 
 Each function returns a tuple of ``(subject, html_body, plain_body)`` ready to
 be passed to ``email_service.send_email``.
+
+All user-controlled values are HTML-escaped via ``html_escape()`` before
+interpolation into ``html_body`` strings (BUG 28 — output encoding).
+Plain-text bodies use raw values (no HTML context).
 """
 
 
 from datetime import datetime
+
+from backend.core.sanitizer import html_escape as _esc
 
 
 def _format_deadline(deadline: str | None) -> str:
@@ -60,14 +66,18 @@ def interview_invite_email(
         f"— AI Hiring Platform"
     )
 
+    # BUG 28: escape user-controlled values for HTML context
+    _candidate_name = _esc(candidate_name)
+    _round_label = _esc(round_label)
+
     html_body = f"""\
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; line-height: 1.6; max-width: 560px; margin: 0 auto; padding: 24px;">
   <h2 style="margin-top: 0; color: #0f172a;">Interview Invitation</h2>
-  <p>Dear {candidate_name},</p>
-  <p>You have been invited to complete the <strong>{round_label}</strong> round of our interview process.</p>
+  <p>Dear {_candidate_name},</p>
+  <p>You have been invited to complete the <strong>{_round_label}</strong> round of our interview process.</p>
   <p>Please click the link below to begin your interview:</p>
   <p style="margin: 20px 0;">
     <a href="{link}" style="display: inline-block; padding: 10px 24px; background: #6366f1; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Start Interview</a>
@@ -89,7 +99,24 @@ def credential_delivery_email(
     password: str,
     portal_url: str,
 ) -> tuple[str, str, str]:
-    """Build a credentials delivery email for a newly onboarded company admin."""
+    """Build a credentials delivery email for a newly onboarded company admin.
+
+    .. deprecated::
+        **SECURITY CONCERN (Issue #20, item 4)**: This function sends the plaintext
+        password in the email body. This is an inherent risk — email is not a secure
+        channel, and passwords can be logged, cached, or intercepted in transit.
+
+        **Recommended migration path**:
+        1. Replace ``password`` with a one-time, time-limited setup token/link
+           (e.g. ``/setup-account?token=<token>``).
+        2. The link lands on a "Set your password" page; the user chooses their own
+           password (never transmitted via email).
+        3. Until this migration is complete, the current implementation is retained
+           as a stop-gap, but callers should plan to switch to the token-based flow.
+
+        The ``create_company`` and ``send-credentials`` admin routes both invoke this
+        function (see ``backend/admin/routes.py``).
+    """
     subject = "Your AI Hiring Platform Credentials"
 
     plain_body = (
@@ -102,17 +129,22 @@ def credential_delivery_email(
         f"— AI Hiring Platform"
     )
 
+    # BUG 28: escape user-controlled values for HTML context
+    _company_name = _esc(company_name)
+    _admin_email = _esc(admin_email)
+    _password = _esc(password)
+
     html_body = f"""\
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; line-height: 1.6; max-width: 560px; margin: 0 auto; padding: 24px;">
   <h2 style="margin-top: 0; color: #0f172a;">Welcome to AI Hiring Platform</h2>
-  <p>Your company <strong>{company_name}</strong> has been successfully onboarded.</p>
+  <p>Your company <strong>{_company_name}</strong> has been successfully onboarded.</p>
   <p>Here are your login credentials:</p>
   <table style="border-collapse: collapse; width: 100%; margin: 16px 0; background: #f8fafc; border-radius: 8px;">
-    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Login Email</td><td style="padding: 10px 16px; font-family: monospace;">{admin_email}</td></tr>
-    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Password</td><td style="padding: 10px 16px; font-family: monospace;">{password}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Login Email</td><td style="padding: 10px 16px; font-family: monospace;">{_admin_email}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Password</td><td style="padding: 10px 16px; font-family: monospace;">{_password}</td></tr>
   </table>
   <p style="margin: 20px 0;">
     <a href="{portal_url}" style="display: inline-block; padding: 10px 24px; background: #6366f1; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Go to Login Portal</a>
@@ -153,13 +185,16 @@ def credits_adjusted_email(
         f"— AI Hiring Platform"
     )
 
+    # BUG 28: escape user-controlled values for HTML context
+    _company_name = _esc(company_name)
+
     html_body = f"""\
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; line-height: 1.6; max-width: 560px; margin: 0 auto; padding: 24px;">
   <h2 style="margin-top: 0; color: #0f172a;">Credits {('Added' if delta > 0 else 'Removed')}</h2>
-  <p>Your credit balance for <strong>{company_name}</strong> has been updated by the platform administrator.</p>
+  <p>Your credit balance for <strong>{_company_name}</strong> has been updated by the platform administrator.</p>
   <table style="border-collapse: collapse; width: 100%; margin: 16px 0; background: #f8fafc; border-radius: 8px;">
     <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Credits {action_label} your account</td><td style="padding: 10px 16px; font-family: monospace;">{change}</td></tr>
     <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Current Allowance</td><td style="padding: 10px 16px; font-family: monospace;">{new_allowance:,}</td></tr>
@@ -206,17 +241,22 @@ def company_details_email(
         f"— AI Hiring Platform"
     )
 
+    # BUG 28: escape user-controlled values for HTML context
+    _company_name = _esc(company_name)
+    _admin_email = _esc(admin_email)
+    _plan = _esc(plan.title())
+
     html_body = f"""\
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; line-height: 1.6; max-width: 560px; margin: 0 auto; padding: 24px;">
   <h2 style="margin-top: 0; color: #0f172a;">Your AI Hiring Platform Account Summary</h2>
-  <p>Here is a summary of your account for <strong>{company_name}</strong>:</p>
+  <p>Here is a summary of your account for <strong>{_company_name}</strong>:</p>
   <table style="border-collapse: collapse; width: 100%; margin: 16px 0; background: #f8fafc; border-radius: 8px;">
-    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Company</td><td style="padding: 10px 16px;">{company_name}</td></tr>
-    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Admin Email</td><td style="padding: 10px 16px; font-family: monospace;">{admin_email}</td></tr>
-    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Plan</td><td style="padding: 10px 16px;">{plan.title()}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Company</td><td style="padding: 10px 16px;">{_company_name}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Admin Email</td><td style="padding: 10px 16px; font-family: monospace;">{_admin_email}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Plan</td><td style="padding: 10px 16px;">{_plan}</td></tr>
     <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Credit Allowance</td><td style="padding: 10px 16px; font-family: monospace;">{allowance:,}</td></tr>
     <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Credits Used</td><td style="padding: 10px 16px; font-family: monospace;">{used:,}</td></tr>
     <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Credits Remaining</td><td style="padding: 10px 16px; font-family: monospace;">{remaining:,}</td></tr>
@@ -267,9 +307,14 @@ def demo_confirmation_email(
         f"\nYour message:\n{message.strip()}\n" if message.strip() else ""
     )
 
+    # BUG 28: escape user-controlled values for HTML context
+    _contact_name = _esc(contact_name)
+    _company_name = _esc(company_name)
+    _message = _esc(message.strip())
+
     html_rows = "".join(
-        f'<tr><td style="padding: 10px 16px; font-weight: 600; color: #475569; white-space: nowrap;">{label}</td>'
-        f'<td style="padding: 10px 16px;">{value}</td></tr>'
+        f'<tr><td style="padding: 10px 16px; font-weight: 600; color: #475569; white-space: nowrap;">{_esc(label)}</td>'
+        f'<td style="padding: 10px 16px;">{_esc(value)}</td></tr>'
         for label, value in details_lines
     )
     html_summary = (
@@ -278,7 +323,7 @@ def demo_confirmation_email(
         f'{html_rows}</table>'
     ) if details_lines else ""
     html_message = (
-        f'<p style="margin: 16px 0;"><strong>Your message:</strong><br />{message.strip()}</p>'
+        f'<p style="margin: 16px 0;"><strong>Your message:</strong><br />{_message}</p>'
         if message.strip()
         else ""
     )
@@ -301,8 +346,8 @@ def demo_confirmation_email(
 <head><meta charset="utf-8"></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; line-height: 1.6; max-width: 560px; margin: 0 auto; padding: 24px;">
   <h2 style="margin-top: 0; color: #0f172a;">We've received your demo request</h2>
-  <p>Dear {contact_name},</p>
-  <p>Thank you for requesting a live demo of the <strong>AI Hiring Platform</strong> for <strong>{company_name}</strong>.</p>
+  <p>Dear {_contact_name},</p>
+  <p>Thank you for requesting a live demo of the <strong>AI Hiring Platform</strong> for <strong>{_company_name}</strong>.</p>
   <p>Our hiring technology specialists have received your details and will reach out to schedule your personalized session.</p>
   {html_summary}
   {html_message}

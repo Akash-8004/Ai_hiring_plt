@@ -200,4 +200,4 @@ PLAN_LIMITS = {
     "enterprise": {"max_users": 50, "max_candidates": 5000, "max_credits": 10000},
 }
 
-PLAN_PRICES = {"starter": None, "growth": None, "enterprise": None}
+PLAN_PRICES = {"starter": 199, "growth": 499, "enterprise": None}

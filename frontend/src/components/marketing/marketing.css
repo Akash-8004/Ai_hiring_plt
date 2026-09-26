@@ -1677,6 +1677,14 @@
   white-space: nowrap;
 }
 
+.mkt-captcha-question.mkt-captcha-error {
+  flex: 1;
+  min-width: 0;
+  color: #fca5a5;
+  font-weight: 500;
+  white-space: normal;
+}
+
 .mkt-captcha input {
   flex: 1;
   min-width: 0;

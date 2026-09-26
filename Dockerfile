@@ -4,7 +4,7 @@ WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
-RUN npm run build
+RUN npm run check:xss && npm run build
 
 # ── Stage 2: Python runtime ────────────────────────────────────────────────
 FROM python:3.12-slim

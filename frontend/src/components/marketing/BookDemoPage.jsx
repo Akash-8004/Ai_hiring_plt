@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   CheckCircle2, ArrowLeft, ArrowRight, RefreshCw, Sparkles, ShieldCheck,
@@ -37,20 +37,56 @@ export function BookDemoPage() {
 
   const [captcha, setCaptcha] = useState({ token: "", question: "" });
   const [captchaAnswer, setCaptchaAnswer] = useState("");
+  // "loading" | "ready" | "error" — kept separate from `captcha.question` so a
+  // failed fetch is never rendered as an indefinite "Loading..." state.
+  const [captchaStatus, setCaptchaStatus] = useState("loading");
+  const [captchaError, setCaptchaError] = useState("");
 
-  const loadCaptcha = async () => {
+  // Monotonic request id: only the newest challenge may write state, so a slow
+  // earlier response cannot overwrite a newer token/question pair.
+  const captchaReqRef = useRef(0);
+  const captchaAbortRef = useRef(null);
+
+  const loadCaptcha = useCallback(async () => {
+    const reqId = captchaReqRef.current + 1;
+    captchaReqRef.current = reqId;
+
+    captchaAbortRef.current?.abort();
+    const controller = new AbortController();
+    captchaAbortRef.current = controller;
+
+    setCaptchaStatus("loading");
+    setCaptchaError("");
+
     try {
-      const data = await apiFetchJson("/api/public/captcha");
+      const data = await apiFetchJson("/api/public/captcha", {
+        signal: controller.signal,
+        timeout: 10000,
+      });
+      if (reqId !== captchaReqRef.current) return;
       setCaptcha({ token: data.token, question: data.question });
       setCaptchaAnswer("");
-    } catch {
+      setCaptchaStatus("ready");
+    } catch (err) {
+      if (reqId !== captchaReqRef.current) return;
+      if (err?.name === "AbortError") return;
       setCaptcha({ token: "", question: "" });
+      setCaptchaAnswer("");
+      setCaptchaError(
+        err?.message || "We couldn't load the security check. Please try again."
+      );
+      setCaptchaStatus("error");
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadCaptcha();
-  }, []);
+    return () => {
+      // Invalidate any in-flight request and abort it on unmount.
+      captchaReqRef.current += 1;
+      captchaAbortRef.current?.abort();
+    };
+  }, [loadCaptcha]);
 
   const update = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
 
@@ -70,7 +106,9 @@ export function BookDemoPage() {
       setSuccess(true);
     } catch (err) {
       setError(err.message || "Failed to submit request. Please verify your details.");
-      if (/security check|captcha/i.test(err.message || "")) {
+      // Challenges are single-use server-side, so a rejected/expired CAPTCHA
+      // always needs a fresh one. Prefer the stable error code over message text.
+      if (err?.code === "captcha_error" || /security check|captcha/i.test(err.message || "")) {
         loadCaptcha();
       }
     } finally {
@@ -256,7 +294,7 @@ export function BookDemoPage() {
               <div className="mkt-form-group">
                 <label>Security Check *</label>
                 <div className="mkt-captcha">
-                  {captcha.question ? (
+                  {captchaStatus === "ready" ? (
                     <>
                       <span className="mkt-captcha-question">
                         What is {captcha.question}
@@ -280,6 +318,21 @@ export function BookDemoPage() {
                         <RefreshCw size={15} />
                       </button>
                     </>
+                  ) : captchaStatus === "error" ? (
+                    <>
+                      <span className="mkt-captcha-question mkt-captcha-error" role="alert">
+                        {captchaError}
+                      </span>
+                      <button
+                        type="button"
+                        className="mkt-captcha-refresh"
+                        onClick={loadCaptcha}
+                        aria-label="Retry security check"
+                        title="Retry security check"
+                      >
+                        <RefreshCw size={15} />
+                      </button>
+                    </>
                   ) : (
                     <span className="mkt-captcha-question">
                       Loading security check...
@@ -291,7 +344,7 @@ export function BookDemoPage() {
               <button
                 type="submit"
                 className="mkt-btn mkt-btn-primary mkt-btn-lg"
-                disabled={loading || !captcha.question}
+                disabled={loading || captchaStatus !== "ready"}
                 style={{ marginTop: "0.5rem" }}
               >
                 {loading ? "Scheduling Demo..." : "Schedule My Demo"} <ArrowRight size={17} />

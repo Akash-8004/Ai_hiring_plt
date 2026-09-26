@@ -55,9 +55,11 @@ export function UsageView() {
   const allowance = credits.allowance || 0;
   const used = credits.used || 0;
   const remaining = credits.remaining ?? 0;
-  const usedPct = allowance > 0 ? Math.min(100, (used / allowance) * 100) : 0;
-  const lowBalance = !loading && allowance > 0 && remaining < allowance * 0.2;
-  const exhausted = !loading && allowance > 0 && remaining <= 0;
+  const adjustments = credits.adjustments !== undefined ? credits.adjustments : (remaining + used - allowance);
+  const pool = allowance + adjustments;
+  const usedPct = pool > 0 ? Math.min(100, Math.max(0, (used / pool) * 100)) : 0;
+  const lowBalance = !loading && pool > 0 && remaining < pool * 0.2;
+  const exhausted = !loading && remaining <= 0;
 
   const total = usageData?.usage?.total || 0;
   const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -126,6 +128,12 @@ export function UsageView() {
                   <strong className="usage-stat-value">{allowance.toLocaleString()}</strong>
                 </div>
                 <div>
+                  <span className="usage-stat-label">Adjustments</span>
+                  <strong className="usage-stat-value">
+                    {adjustments > 0 ? `+${adjustments.toLocaleString()}` : adjustments.toLocaleString()}
+                  </strong>
+                </div>
+                <div>
                   <span className="usage-stat-label">Used</span>
                   <strong className="usage-stat-value">{used.toLocaleString()}</strong>
                 </div>
@@ -142,7 +150,7 @@ export function UsageView() {
                   style={{ width: `${usedPct}%` }}
                 />
               </div>
-              <p className="text-xs text-muted mt-2">{used.toLocaleString()} / {allowance.toLocaleString()} credits used ({Math.round(usedPct)}%)</p>
+              <p className="text-xs text-muted mt-2">{used.toLocaleString()} / {Math.max(0, pool).toLocaleString()} credits used ({Math.round(usedPct)}%)</p>
             </>
           )}
         </div>

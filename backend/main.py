@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from backend.core.models import JobDescription, ParsedResume
+from backend.core.sanitizer import strip_html as _strip_html
 from backend.core.sample_data import DEFAULT_JOB
 from backend.config import frontend_base_url
 from backend.live.relay import GeminiLiveRelay
@@ -82,6 +83,19 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"
+    # Content-Security-Policy — tuned for React/Vite SPA + Google Fonts + WebSocket + media
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: blob:; "
+        "media-src 'self' blob:; "
+        "connect-src 'self' wss: ws:; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "object-src 'none'"
+    )
     if not _is_dev:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
@@ -253,6 +267,15 @@ def update_job(
     if not company_id:
         raise HTTPException(status_code=400, detail="No company associated")
     job = JobDescription(**payload.model_dump(exclude={"job_id"}))
+    # BUG 28: sanitize user-supplied job text fields on write
+    job.title = _strip_html(job.title)
+    job.description = _strip_html(job.description)
+    job.department = _strip_html(job.department)
+    job.location = _strip_html(job.location)
+    job.education = _strip_html(job.education)
+    for q in job.custom_questions:
+        if isinstance(q, dict) and isinstance(q.get("text"), str):
+            q["text"] = _strip_html(q["text"])
     effective_job_id = payload.job_id
 
     is_admin = user.get("role") in ("super_admin", "company_admin")
@@ -663,22 +686,61 @@ def update_round_deadline(
     return _workspace_payload(company_id, user, job_id=job_id)
 
 
+# ── Pipeline override reasons ────────────────────────────────────────────────
+# An admin may bypass a pipeline gate (invite a resume-rejected candidate to
+# the HR round, or invite a candidate who failed HR to the technical round).
+# Every such bypass must carry one of these reasons so it is auditable later.
+OVERRIDE_REASONS = {
+    "strong_resume": "Strong resume / screening mis-scored",
+    "referral": "Referred by a team member",
+    "recruiter_request": "Direct request from the hiring manager",
+    "candidate_experience": "Relevant experience the rubric missed",
+    "role_priority": "Urgent / priority role",
+}
+MAX_OVERRIDE_NOTE = 500
+
+
 @app.post("/api/candidates/{email}/invite")
 def invite_candidate(
     email: str,
     interview_type: str = "technical",
     send_email: bool = True,
+    override_reason: str = "",
+    override_note: str = "",
     user: dict = Depends(require_permission("conduct_interviews")),
     request: Request = None,
 ) -> dict[str, Any]:
-    """Generate an interview invitation link. interview_type can be 'technical' or 'hr'."""
+    """Generate an interview invitation link. interview_type can be 'technical' or 'hr'.
+
+    Advancing a candidate past a gate they did not clear is allowed, but only
+    as an explicit, recorded override — never silently. See OVERRIDE_REASONS.
+    """
     if interview_type not in ("hr", "technical"):
         raise HTTPException(status_code=400, detail="Interview type must be 'hr' or 'technical'.")
     company_id = str(user["company_id"]) if user.get("company_id") else None
-    candidate_doc = database.get_candidate_doc(email, company_id)
+
+    # Resolve the drive exactly as the pipeline view does, and look the candidate
+    # up *within that drive*.
+    #
+    # A candidate document is keyed by (email, company, job), so the same person
+    # uploaded to a second drive has a second, independent document. Looking the
+    # candidate up by email alone returns an arbitrary one of them, so the invite
+    # would be validated against — and written to — a different drive's state.
+    # That surfaced as "The hr deadline has passed" on candidates that had never
+    # been near an expired deadline, while the UI showed the active drive's
+    # healthy one.
+    effective_job_id = _resolve_effective_job_id(company_id)
+    candidate_doc = (
+        database.get_candidate_doc(email, company_id, effective_job_id)
+        if effective_job_id
+        else None
+    )
     if not candidate_doc:
-        raise HTTPException(status_code=404, detail="Candidate not found.")
-    job_id = candidate_doc.get("job_id")
+        raise HTTPException(
+            status_code=404,
+            detail="Candidate not found in the current job drive.",
+        )
+    job_id = candidate_doc.get("job_id") or effective_job_id
     job_doc = database.get_job_doc(company_id, job_id) if company_id and job_id else None
     job_doc = job_doc or {}
     deadline_field = (
@@ -694,8 +756,80 @@ def invite_candidate(
         raise HTTPException(status_code=400, detail=f"The {interview_type} deadline has passed.")
     if interview_type == "technical" and _deadline_is_active(job_doc.get("hr_deadline")):
         raise HTTPException(status_code=403, detail="Technical round unlocks after the HR deadline passes.")
-    if interview_type == "technical" and (candidate_doc.get("hr_interview") or {}).get("decision") not in ("PASS", "FAIL"):
-        raise HTTPException(status_code=400, detail="Candidate must complete the HR round before a technical invitation can be issued.")
+
+    # ── Pipeline gate ──────────────────────────────────────────────────────
+    # Three explicit outcomes instead of a "decision in (PASS, FAIL)" test,
+    # which used to let a FAILED HR round through indistinguishably from a pass.
+    hr_interview = candidate_doc.get("hr_interview") or {}
+    hr_decision = hr_interview.get("decision")
+
+    # Shortlist status is re-derived exactly as services/ranking.py does.
+    # A missing cached_score is treated as "not shortlisted", which
+    # conservatively requires a reason rather than silently waving the invite by.
+    cached_score = candidate_doc.get("cached_score") or {}
+    resume_score = cached_score.get("total_score")
+    threshold = job_doc.get("threshold", 80)
+    resume_shortlisted = isinstance(resume_score, (int, float)) and resume_score >= threshold
+
+    if interview_type == "technical":
+        if hr_decision == "PASS":
+            override_needed = False
+        elif hr_decision == "FAIL":
+            override_needed = True
+        else:
+            # Never attempted the HR round — a hard block, not an override.
+            raise HTTPException(
+                status_code=400,
+                detail="Candidate must complete the HR round before a technical invitation can be issued.",
+            )
+    else:
+        override_needed = not resume_shortlisted
+
+    reason_code = (override_reason or "").strip()
+    if override_needed:
+        if not reason_code:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "override_reason_required",
+                    "message": (
+                        f"This candidate did not clear the "
+                        f"{'resume screening' if interview_type == 'hr' else 'HR round'}. "
+                        "A reason is required to invite them anyway."
+                    ),
+                },
+            )
+        if reason_code not in OVERRIDE_REASONS:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_override_reason",
+                    "message": "Select a valid override reason.",
+                },
+            )
+
+    if override_needed:
+        database.record_candidate_override(
+            email,
+            {
+                "round": interview_type,
+                "reason": reason_code,
+                "reason_label": OVERRIDE_REASONS[reason_code],
+                "note": (override_note or "").strip()[:MAX_OVERRIDE_NOTE],
+                "by_email": user.get("email", ""),
+                "by_role": user.get("role", ""),
+                "at": datetime.now(timezone.utc).isoformat(),
+                "context": {
+                    "resume_score": resume_score,
+                    "resume_status": "Shortlisted" if resume_shortlisted else "Rejected",
+                    "hr_decision": hr_decision,
+                    "hr_score": hr_interview.get("score"),
+                },
+            },
+            company_id,
+            job_id,
+        )
+
     invitation_key = "hr_invitation" if interview_type == "hr" else "invitation"
     invitation = candidate_doc.get(invitation_key) or {}
     if not invitation.get("token"):
@@ -713,13 +847,32 @@ def invite_candidate(
             database.set_candidate_invitation(email, invitation, company_id, job_id)
     token = invitation["token"]
     log_activity(
-        action=f"candidate.invited_{interview_type}",
+        action=(
+            f"candidate.{interview_type}_round_overridden"
+            if override_needed
+            else f"candidate.invited_{interview_type}"
+        ),
         category="candidate",
         actor=user,
         target_type="candidate",
         target_id=email,
         target_label=email,
-        metadata={"interview_type": interview_type},
+        metadata={
+            "interview_type": interview_type,
+            **(
+                {
+                    "override": True,
+                    "override_reason": reason_code,
+                    "override_reason_label": OVERRIDE_REASONS[reason_code],
+                    "override_note": (override_note or "").strip()[:MAX_OVERRIDE_NOTE],
+                    "hr_decision": hr_decision,
+                    "resume_score": resume_score,
+                }
+                if override_needed
+                else {}
+            ),
+        },
+        severity="warning" if override_needed else "info",
         request=request,
     )
 
@@ -802,15 +955,18 @@ def interview_session(token: str) -> dict[str, Any]:
         if company:
             company_name = company.get("settings", {}).get("interview_branding_name", company.get("name", company_name))
 
-    system_prompt = get_interviewer_prompt(interview_type, current_job, resume)
+    # NOTE: systemPrompt is intentionally NOT returned here (contains full resume
+    # PII).  It is generated server-side in the WebSocket handler instead.
+
+    # Redact candidate name to first name only for this public endpoint
+    first_name = (resume.full_name or "Candidate").split()[0] if resume.full_name else "Candidate"
 
     return {
         "token": token,
-        "candidateName": resume.full_name,
+        "candidateName": first_name,
         "jobTitle": current_job.title,
         "companyName": company_name,
         "interviewType": interview_type,
-        "systemPrompt": system_prompt,
         "customQuestions": (
             _sanitized_questions(current_job.custom_questions)
             if interview_type == "technical"
@@ -1312,6 +1468,7 @@ def _workspace_payload(
         row["hr_interview"] = doc.get("hr_interview")
         row["interview_transcript"] = doc.get("interview_transcript") or []
         row["email_sent"] = doc.get("email_sent") or {}
+        row["overrides"] = doc.get("overrides") or []
         row["tech_round_locked"] = _deadline_is_active(hr_deadline)
         row["recording"] = (doc.get("technical_interview") or {}).get("recording") or (doc.get("hr_interview") or {}).get("recording")
         rows.append(row)

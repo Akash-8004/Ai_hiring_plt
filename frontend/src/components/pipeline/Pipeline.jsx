@@ -2,8 +2,47 @@ import React, { useEffect, useState } from "react";
 import { CalendarClock, Loader2, Send } from "lucide-react";
 import { PipelineCandidateRow } from "./PipelineCandidateRow";
 
+/**
+ * Format a stored ISO instant as a `datetime-local` input value.
+ *
+ * A `datetime-local` value is a *naive* wall-clock string, and the browser
+ * parses it back with `new Date(value)` as **local** time (per the ES spec).
+ * So the input must be populated with local wall-clock components.
+ *
+ * Using `toISOString()` here would display UTC, which the save handler would
+ * then re-read as local time — shifting the deadline by the browser's UTC
+ * offset on every save. In timezones ahead of UTC that walks the deadline
+ * backwards until it lands in the past.
+ */
 function toInputValue(deadline) {
-  return deadline ? new Date(deadline).toISOString().slice(0, 16) : "";
+  if (!deadline) return "";
+  const date = new Date(deadline);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
+}
+
+/** The local wall-clock a deadline is displayed at, for confirmation text. */
+function formatLocal(deadline) {
+  if (!deadline) return "";
+  const date = new Date(deadline);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+}
+
+/**
+ * The viewer's UTC offset, so a deadline set by one teammate is unambiguous to
+ * the next. Without this, a UTC-stored deadline looks shifted by hours.
+ */
+function localTimeZoneLabel() {
+  const offset = -new Date().getTimezoneOffset();
+  const sign = offset >= 0 ? "+" : "-";
+  const abs = Math.abs(offset);
+  const hours = String(Math.floor(abs / 60)).padStart(2, "0");
+  const minutes = String(abs % 60).padStart(2, "0");
+  return `UTC${sign}${hours}:${minutes}`;
 }
 
 function deadlineStatus(deadline) {
@@ -50,7 +89,10 @@ export function Pipeline({ candidates, onInvite, onRefresh, onDeadline, deadline
           </button>
           {deadline ? <button className="text-button" onClick={() => onDeadline(type, null)} disabled={!canInvite || busy}>Clear</button> : null}
         </div>
-        <span className={deadline && new Date(deadline) <= new Date() ? "deadline-expired" : "muted-cell"}>{deadlineStatus(deadline)}</span>
+        <span className={deadline && new Date(deadline) <= new Date() ? "deadline-expired" : "muted-cell"}>
+          {deadlineStatus(deadline)}
+          {deadline ? ` · ${formatLocal(deadline)} (${localTimeZoneLabel()})` : ""}
+        </span>
       </div>
     );
   }
@@ -65,6 +107,7 @@ export function Pipeline({ candidates, onInvite, onRefresh, onDeadline, deadline
     ["Tech Interview", techDone.length],
     ["Tech Passed", techPassed.length],
     ["Hired", hiredList.length],
+    ["Overrides", candidates.filter((c) => c.overrides?.length).length],
   ];
 
   return (

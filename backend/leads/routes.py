@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from backend.auth.security import check_lead_rate_limit, log_activity, require_super_admin
+from backend.core.sanitizer import sanitize_dict_fields, strip_html
 from backend.services import email_service
 from backend.services.email_templates import demo_confirmation_email
 from backend.storage import database
@@ -41,15 +42,19 @@ def new_captcha() -> dict:
     return {"token": token, "question": f"{a} + {b} = ?"}
 
 
-def _validate_captcha(token: str, answer: str) -> tuple[bool, str]:
-    """Consume and validate a CAPTCHA challenge. Challenges are single-use."""
+def _validate_captcha(token: str, answer: str) -> tuple[bool, str, str]:
+    """Consume and validate a CAPTCHA challenge. Challenges are single-use.
+
+    Returns ``(ok, error_code, message)``.  ``error_code`` is a stable
+    machine-readable slug so clients can react without matching on message text.
+    """
     challenge = _captcha_challenges.pop(token.strip(), None)
     if not challenge or challenge["exp"] < time.time():
-        return False, "Security check expired. Please refresh and try again."
+        return False, "captcha_error", "Security check expired. Please refresh and try again."
     expected = hashlib.sha256(answer.strip().encode("utf-8")).hexdigest()
     if not secrets.compare_digest(expected, challenge["answer_hash"]):
-        return False, "Incorrect security check. Please try again."
-    return True, ""
+        return False, "captcha_error", "Incorrect security check. Please try again."
+    return True, "", ""
 
 
 class LeadCreateRequest(BaseModel):
@@ -88,9 +93,12 @@ def create_lead(payload: LeadCreateRequest, request: Request) -> dict:
     ip = request.client.host if request.client else "unknown"
     check_lead_rate_limit(ip)
 
-    ok, captcha_error = _validate_captcha(payload.captcha_token, payload.captcha_answer)
+    ok, captcha_code, captcha_error = _validate_captcha(payload.captcha_token, payload.captcha_answer)
     if not ok:
-        raise HTTPException(status_code=400, detail=captcha_error)
+        raise HTTPException(
+            status_code=400,
+            detail={"code": captcha_code, "message": captcha_error},
+        )
 
     email = payload.work_email.strip().lower()
     if not EMAIL_RE.match(email):
@@ -110,6 +118,11 @@ def create_lead(payload: LeadCreateRequest, request: Request) -> dict:
         "notes": [],
         "converted_company_id": None,
     }
+    # BUG 28: strip HTML tags from user-supplied fields on write
+    sanitize_dict_fields(doc, [
+        "company_name", "industry", "contact_name", "phone",
+        "team_size", "hiring_volume", "message",
+    ])
     lead_id = database.insert_lead(doc)
     log_activity(
         action="lead.created",
@@ -117,8 +130,8 @@ def create_lead(payload: LeadCreateRequest, request: Request) -> dict:
         actor={"_id": "public", "email": email, "role": "public", "company_id": None},
         target_type="lead",
         target_id=lead_id,
-        target_label=payload.company_name.strip(),
-        metadata={"contact_name": payload.contact_name.strip()},
+        target_label=doc["company_name"],
+        metadata={"contact_name": doc["contact_name"]},
         request=request,
     )
 
@@ -205,7 +218,8 @@ def admin_update_lead(
     if body.converted_company_id is not None:
         updates["converted_company_id"] = body.converted_company_id
     if body.note and body.note.strip():
-        updates["append_note"] = {"text": body.note.strip(), "by": user.get("email", "")}
+        # BUG 28: strip HTML from admin notes on write
+        updates["append_note"] = {"text": strip_html(body.note.strip()), "by": user.get("email", "")}
 
     if not updates:
         return {"ok": True, "lead": _serialize_lead(lead)}

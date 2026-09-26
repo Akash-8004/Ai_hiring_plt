@@ -6,6 +6,7 @@ import urllib.request
 
 from backend.config import load_env
 from backend.core.models import JobDescription, ParsedResume
+from backend.core.sanitizer import sanitize_for_prompt as _sanitize
 
 HR_EVALUATION_PROMPT = """
 You are an expert HR interviewer evaluator with 10+ years of experience in talent assessment.
@@ -75,7 +76,7 @@ Education: {resume.education}
 Detected skills: {", ".join(resume.skills)}
 
 RESUME TEXT:
-{resume.raw_text[:6000]}
+{_sanitize(resume.raw_text, max_length=6000)}
 
 INTERVIEW STRUCTURE (10-15 minutes total):
 1. WARM OPENING: Greet the candidate warmly by name, introduce yourself as from the HR team, ask them to introduce themselves.

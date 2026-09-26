@@ -273,6 +273,11 @@ def list_companies_with_counts() -> list[dict]:
         credits = c.get("credits") or {}
         if credits.get("period") != current_period:
             credits = reset_company_credits_if_due(c["_id"])
+        if "adjustments" not in credits:
+            allowance = credits.get("allowance", 0)
+            remaining = credits.get("remaining", 0)
+            used = credits.get("used", 0)
+            credits["adjustments"] = remaining + used - allowance
         c["credits"] = credits
         results.append(c)
     return results
@@ -403,6 +408,7 @@ def _fresh_credits_bucket(allowance: int, period: str | None = None) -> dict:
         "used": 0,
         "remaining": allowance,
         "overage": 0,
+        "adjustments": 0,
     }
 
 
@@ -471,6 +477,11 @@ def reset_company_credits_if_due(company_id: str) -> dict:
     current_period = _month_period()
     credits = company.get("credits") or {}
     if credits.get("period") == current_period:
+        if "adjustments" not in credits:
+            allowance = credits.get("allowance", 0)
+            remaining = credits.get("remaining", 0)
+            used = credits.get("used", 0)
+            credits["adjustments"] = remaining + used - allowance
         return credits
     allowance = _company_allowance(company)
     bucket = _fresh_credits_bucket(allowance, current_period)
@@ -527,12 +538,16 @@ def apply_plan_credit_change(company_id: str, new_allowance: int) -> dict:
     overage = credits.get("overage", 0)
     if diff < 0:
         overage += old_remaining - new_remaining
+    adjustments = credits.get("adjustments")
+    if adjustments is None:
+        adjustments = old_remaining + credits.get("used", 0) - old_allowance
     bucket = {
         "period": current_period,
         "allowance": new_allowance,
         "used": credits.get("used", 0),
         "remaining": new_remaining,
         "overage": overage,
+        "adjustments": adjustments,
     }
     _companies.update_one(
         {"_id": ObjectId(company_id)},
@@ -568,7 +583,7 @@ def adjust_company_credits(company_id: str, delta: int) -> dict:
     if delta >= 0:
         _companies.update_one(
             {"_id": ObjectId(company_id)},
-            {"$inc": {"credits.remaining": delta}},
+            {"$inc": {"credits.remaining": delta, "credits.adjustments": delta}},
         )
     else:
         removal = abs(delta)
@@ -581,6 +596,7 @@ def adjust_company_credits(company_id: str, delta: int) -> dict:
                 "$inc": {
                     "credits.remaining": -actual,
                     "credits.overage": blocked,
+                    "credits.adjustments": -actual,
                 }
             },
         )
@@ -775,26 +791,79 @@ def query_audit_log(filters: dict, page: int = 1, limit: int = 50) -> dict:
     return {"total": total, "page": page, "limit": limit, "logs": cleaned_logs}
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# PLATFORM STATS
-# ═══════════════════════════════════════════════════════════════════════════
+# ── Stats cache (10s TTL) ───────────────────────────────────────────────────
+import time as _time
+import threading as _threading
+
+_stats_cache: dict | None = None
+_stats_cache_ts: float = 0.0
+_stats_cache_lock = _threading.Lock()
+_STATS_CACHE_TTL = 10  # seconds
+
 
 def get_platform_stats() -> dict:
-    active_filter = {"status": {"$ne": "archived"}}
-    return {
-        "total_companies": _companies.count_documents(active_filter),
-        "active_companies": _companies.count_documents({"status": "active"}),
-        "suspended_companies": _companies.count_documents({"status": "suspended"}),
-        "archived_companies": _companies.count_documents({"status": "archived"}),
-        "total_users": _users.count_documents({}),
-        "total_candidates": _candidates.count_documents({}),
-        "total_interviews": _candidates.count_documents({
-            "$or": [
-                {"technical_interview.status": "completed"},
-                {"hr_interview.status": "completed"},
-            ]
-        }),
-    }
+    """Platform-wide KPIs — uses $facet to minimise round-trips and a 10s TTL cache.
+
+    Round-trip budget (was 7, now 2-3):
+      1. _companies $facet  → total / active / suspended / archived counts
+      2. _candidates $facet → total + completed-interview count
+      3. _users estimated_document_count (no filter, single fast call)
+    """
+    global _stats_cache, _stats_cache_ts
+
+    now = _time.monotonic()
+    if _stats_cache is not None and (now - _stats_cache_ts) < _STATS_CACHE_TTL:
+        return _stats_cache
+
+    with _stats_cache_lock:
+        # Double-check after acquiring the lock
+        now = _time.monotonic()
+        if _stats_cache is not None and (now - _stats_cache_ts) < _STATS_CACHE_TTL:
+            return _stats_cache
+
+        # ── 1) Companies: single $facet for all four counts ─────────────
+        company_pipeline = [{"$facet": {
+            "total":     [{"$match": {"status": {"$ne": "archived"}}}, {"$count": "n"}],
+            "active":    [{"$match": {"status": "active"}},            {"$count": "n"}],
+            "suspended": [{"$match": {"status": "suspended"}},         {"$count": "n"}],
+            "archived":  [{"$match": {"status": "archived"}},          {"$count": "n"}],
+        }}]
+        company_result = list(_companies.aggregate(company_pipeline))
+        cr = company_result[0] if company_result else {}
+
+        def _extract(facet_result: list) -> int:
+            return facet_result[0]["n"] if facet_result else 0
+
+        # ── 2) Candidates: total + completed-interview count ────────────
+        candidate_pipeline = [{"$facet": {
+            "total": [{"$count": "n"}],
+            "interviews": [
+                {"$match": {"$or": [
+                    {"technical_interview.status": "completed"},
+                    {"hr_interview.status": "completed"},
+                ]}},
+                {"$count": "n"},
+            ],
+        }}]
+        candidate_result = list(_candidates.aggregate(candidate_pipeline))
+        cand = candidate_result[0] if candidate_result else {}
+
+        # ── 3) Users: no filter, fast estimated count ───────────────────
+        total_users = _users.estimated_document_count()
+
+        stats = {
+            "total_companies":     _extract(cr.get("total", [])),
+            "active_companies":    _extract(cr.get("active", [])),
+            "suspended_companies": _extract(cr.get("suspended", [])),
+            "archived_companies":  _extract(cr.get("archived", [])),
+            "total_users":         total_users,
+            "total_candidates":    _extract(cand.get("total", [])),
+            "total_interviews":    _extract(cand.get("interviews", [])),
+        }
+
+        _stats_cache = stats
+        _stats_cache_ts = _time.monotonic()
+        return stats
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1261,6 +1330,20 @@ def set_candidate_email_sent(
     _candidates.update_one(
         _candidate_filter(email, company_id, job_id),
         {"$set": {f"email_sent.{interview_type}": True}},
+    )
+
+
+def record_candidate_override(
+    email: str, entry: dict, company_id: str | None = None, job_id: str | None = None,
+) -> None:
+    """Append one admin pipeline-override record to the candidate's history.
+
+    Uses ``$push`` so the full override history is preserved — a later invite
+    must never erase the fact that an earlier gate was bypassed.
+    """
+    _candidates.update_one(
+        _candidate_filter(email, company_id, job_id),
+        {"$push": {"overrides": entry}},
     )
 
 

@@ -88,6 +88,15 @@ export function SuperAdminDashboard() {
   const [companyViewMode, setCompanyViewMode] = useState("active");
   const [archivedCompanies, setArchivedCompanies] = useState([]);
   const [loadingArchived, setLoadingArchived] = useState(false);
+  const usageCredits = companyUsage?.credits;
+  const usageAllowance = usageCredits?.allowance || 0;
+  const usageUsed = usageCredits?.used || 0;
+  const usageRemaining = usageCredits?.remaining ?? 0;
+  const usageAdjustments = usageCredits?.adjustments !== undefined
+    ? usageCredits.adjustments
+    : (usageRemaining + usageUsed - usageAllowance);
+  const usagePool = usageAllowance + usageAdjustments;
+  const usagePct = usagePool > 0 ? Math.min(100, Math.max(0, (usageUsed / usagePool) * 100)) : 0;
 
   useEffect(() => {
     if (resetPasswordUserId && !resetPasswordSuccess && resetPasswordInputRef.current) {
@@ -477,7 +486,7 @@ export function SuperAdminDashboard() {
         method: "POST",
         body: JSON.stringify({ new_password: newPasswordInput }),
       });
-      setResetPasswordSuccess({ userId, new_password: data.new_password });
+      setResetPasswordSuccess({ userId });
       setNewPasswordInput("");
       setResetPasswordUserId(null);
       setShowNewPassword(false);
@@ -486,13 +495,6 @@ export function SuperAdminDashboard() {
     } finally {
       setResetPasswordLoading(false);
     }
-  };
-
-  const handleCopyPassword = (password) => {
-    navigator.clipboard.writeText(password).then(
-      () => alert("Password copied to clipboard!"),
-      () => alert("Failed to copy.")
-    );
   };
 
   const handleConvertLead = (lead) => {
@@ -844,7 +846,7 @@ export function SuperAdminDashboard() {
                         <td>
                           <span className="text-sm font-mono">
                             {comp.credits
-                              ? `${comp.credits.used || 0} / ${comp.credits.allowance || 0}`
+                              ? `${comp.credits.used || 0} / ${Math.max(0, (comp.credits.allowance || 0) + (comp.credits.adjustments || 0))}`
                               : "—"}
                           </span>
                         </td>
@@ -952,25 +954,32 @@ export function SuperAdminDashboard() {
                                     <div className="usage-stat-grid">
                                       <div>
                                         <span className="usage-stat-label">Allowance</span>
-                                        <strong>{companyUsage.credits.allowance?.toLocaleString() ?? "—"}</strong>
+                                        <strong>{usageAllowance.toLocaleString()}</strong>
+                                      </div>
+                                      <div>
+                                        <span className="usage-stat-label">Adjustments</span>
+                                        <strong>
+                                          {usageAdjustments > 0 ? `+${usageAdjustments.toLocaleString()}` : usageAdjustments.toLocaleString()}
+                                        </strong>
                                       </div>
                                       <div>
                                         <span className="usage-stat-label">Used</span>
-                                        <strong>{companyUsage.credits.used?.toLocaleString() ?? "—"}</strong>
+                                        <strong>{usageUsed.toLocaleString()}</strong>
                                       </div>
                                       <div>
                                         <span className="usage-stat-label">Remaining</span>
-                                        <strong>{companyUsage.credits.remaining?.toLocaleString() ?? "—"}</strong>
+                                        <strong>{usageRemaining.toLocaleString()}</strong>
                                       </div>
                                     </div>
                                     <div className="progress-bar-bg mt-3">
                                       <div
                                         className="progress-bar-fill"
-                                        style={{
-                                          width: `${companyUsage.credits.allowance ? Math.min(100, ((companyUsage.credits.used || 0) / companyUsage.credits.allowance) * 100) : 0}%`,
-                                        }}
+                                        style={{ width: `${usagePct}%` }}
                                       />
                                     </div>
+                                    <p className="text-xs text-muted mt-2">
+                                      {usageUsed.toLocaleString()} / {Math.max(0, usagePool).toLocaleString()} credits used ({Math.round(usagePct)}%)
+                                    </p>
                                     <div className="flex-row gap-2 mt-3 align-center">
                                       <input
                                         type="number"
@@ -1196,73 +1205,15 @@ export function SuperAdminDashboard() {
                                   {resetPasswordSuccess && (
                                     <div className="reset-password-panel">
                                       <div className="credentials-box">
-                                        <div className="credential-row">
-                                          <span className="label">Email</span>
-                                          <span className="value font-mono">
+                                        <p style={{ margin: 0, fontWeight: 600, color: "#22c55e" }}>
+                                          ✓ Password reset successfully
+                                        </p>
+                                        <p className="text-xs text-muted mt-2" style={{ margin: "8px 0 0" }}>
+                                          Password for{" "}
+                                          <strong>
                                             {expandedUsers.find((u) => u._id === resetPasswordSuccess.userId)?.email}
-                                          </span>
-                                        </div>
-                                        <div className="credential-row">
-                                          <span className="label">New Password</span>
-                                          <div className="password-display-row">
-                                            <span className="value font-mono">
-                                              {showNewPassword ? resetPasswordSuccess.new_password : "••••••••"}
-                                            </span>
-                                            <button
-                                              className="btn btn-secondary btn-xs"
-                                              onClick={() => setShowNewPassword(!showNewPassword)}
-                                            >
-                                              {showNewPassword ? <EyeOff size={13} /> : <Eye size={13} />}
-                                            </button>
-                                            <button
-                                              className="btn btn-secondary btn-xs"
-                                              onClick={() => handleCopyPassword(resetPasswordSuccess.new_password)}
-                                            >
-                                              <Copy size={13} /> Copy
-                                            </button>
-                                            <button
-                                              className={`btn btn-secondary btn-xs ${credentialEmailSent === "sent" ? "email-send-btn sent" : credentialEmailSent === "failed" ? "email-send-btn failed" : ""}`}
-                                              disabled={credentialEmailSending || credentialEmailSent === "sent"}
-                                              onClick={async () => {
-                                                const targetUser = expandedUsers.find((u) => u._id === resetPasswordSuccess.userId);
-                                                if (!targetUser) return;
-                                                const companyId = targetUser.company_id;
-                                                if (!companyId) return alert("No company associated");
-                                                setCredentialEmailSending(true);
-                                                setCredentialEmailSent(null);
-                                                try {
-                                                  const res = await apiFetchJson(
-                                                    `/api/admin/companies/${companyId}/send-credentials`,
-                                                    {
-                                                      method: "POST",
-                                                      body: JSON.stringify({
-                                                        admin_email: targetUser.email,
-                                                        admin_password: resetPasswordSuccess.new_password,
-                                                      }),
-                                                    }
-                                                  );
-                                                  setCredentialEmailSent(res.ok ? "sent" : "failed");
-                                                } catch {
-                                                  setCredentialEmailSent("failed");
-                                                } finally {
-                                                  setCredentialEmailSending(false);
-                                                }
-                                              }}
-                                            >
-                                              {credentialEmailSending ? (
-                                                <><Loader2 size={13} className="spin" /> Sending</>
-                                              ) : credentialEmailSent === "sent" ? (
-                                                <>✓ Sent</>
-                                              ) : credentialEmailSent === "failed" ? (
-                                                <><Mail size={13} /> Retry</>
-                                              ) : (
-                                                <><Mail size={13} /> Send via Email</>
-                                              )}
-                                            </button>
-                                          </div>
-                                        </div>
-                                        <p className="text-xs text-muted mt-2">
-                                          Share this new password with the team member. It will not be shown again.
+                                          </strong>{" "}
+                                          has been updated. The user can now log in with their new password.
                                         </p>
                                       </div>
                                       <button
