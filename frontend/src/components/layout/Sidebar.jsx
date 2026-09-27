@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   BarChart3,
   BriefcaseBusiness,
@@ -25,6 +25,35 @@ export function Sidebar({
 }) {
   const { user, role, logout, hasPermission } = useAuth();
   const [planOpen, setPlanOpen] = useState(false);
+
+  // Lock body & document scroll when mobile sidebar drawer is open
+  useEffect(() => {
+    if (open) {
+      document.body.style.overflow = "hidden";
+      document.documentElement.style.overflow = "hidden";
+      document.body.style.touchAction = "none";
+    } else {
+      document.body.style.overflow = "";
+      document.documentElement.style.overflow = "";
+      document.body.style.touchAction = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+      document.documentElement.style.overflow = "";
+      document.body.style.touchAction = "";
+    };
+  }, [open]);
+
+  // Close sidebar drawer if resized to desktop
+  useEffect(() => {
+    function handleResize() {
+      if (window.innerWidth > 760) {
+        onClose();
+      }
+    }
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [onClose]);
 
   const planName = (company?.plan || "starter").toUpperCase();
   const seatsUsed = company?.current_users;
@@ -72,7 +101,10 @@ export function Sidebar({
           <button
             key={key}
             className={activeView === key ? "nav-item active" : "nav-item"}
-            onClick={() => onViewChange(key)}
+            onClick={() => {
+              onViewChange(key);
+              onClose();
+            }}
             title={label}
           >
             <Icon size={18} />

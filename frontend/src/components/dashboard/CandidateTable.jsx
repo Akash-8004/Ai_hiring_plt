@@ -50,6 +50,13 @@ export function CandidateTable({ candidates, onCandidate, onViewDetails }) {
                       >
                         <AlertTriangle size={12} /> No text extracted
                       </span>
+                    ) : candidate.parsingProvider === "gemini-ocr" || (typeof candidate.parsingProvider === "string" && candidate.parsingProvider.endsWith("-ocr")) ? (
+                      <span
+                        className="ocr-badge"
+                        title="Transcribed from scanned/image document via Gemini Vision OCR"
+                      >
+                        <Sparkles size={11} /> OCR Transcribed
+                      </span>
                     ) : null}
                   </div>
                   <span>{candidate.Email}</span>

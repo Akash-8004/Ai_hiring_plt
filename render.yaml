@@ -18,7 +18,7 @@ services:
       - key: AI_PROVIDER
         value: gemini
       - key: GEMINI_MODEL
-        value: gemini-2.0-flash
+        value: gemini-3.5-flash-lite
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_LIVE_MODEL
@@ -45,3 +45,19 @@ services:
         sync: false
       - key: SHORTLIST_THRESHOLD
         value: "80"
+      - key: OCR_CONCURRENCY
+        value: "3"
+      - key: OCR_ENABLED
+        value: "true"
+      - key: OCR_MAX_FILE_MB
+        value: "10"
+      - key: OCR_MAX_PAGES
+        value: "10"
+      - key: OCR_MEDIA_RESOLUTION
+        value: MEDIA_RESOLUTION_MEDIUM
+      - key: OCR_TIMEOUT_SECONDS
+        value: "60"
+      - key: RESUME_JOB_LEASE_SECONDS
+        value: "300"
+      - key: RESUME_JOB_TTL_HOURS
+        value: "24"

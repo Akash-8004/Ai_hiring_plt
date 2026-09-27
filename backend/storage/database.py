@@ -33,6 +33,7 @@ _plans_config = _db["plans_config"]
 _leads = _db["leads"]
 _email_logs = _db["email_logs"]
 _jd_requests = _db["jd_change_requests"]
+_resume_jobs = _db["resume_jobs"]
 
 # ── Indexes ─────────────────────────────────────────────────────────────────
 try:
@@ -69,6 +70,10 @@ try:
     _companies.create_index([("created_at", DESCENDING)])
     _companies.create_index("status")
     _users.create_index("company_id")
+    _resume_jobs.create_index("batchId")
+    _resume_jobs.create_index([("status", 1), ("created_at", 1)])
+    _resume_jobs.create_index([("company_id", 1), ("status", 1)])
+    _resume_jobs.create_index("expireAt", expireAfterSeconds=0)
 except Exception:
     pass
 
@@ -1323,6 +1328,26 @@ def set_candidate_hr_invitation(
     )
 
 
+def set_candidate_invitation_expiry(
+    email: str,
+    interview_type: str,
+    expires_at: str,
+    deadline_source: str = "per_candidate",
+    company_id: str | None = None,
+    job_id: str | None = None,
+) -> None:
+    invitation_field = "hr_invitation" if interview_type == "hr" else "invitation"
+    _candidates.update_one(
+        _candidate_filter(email, company_id, job_id),
+        {
+            "$set": {
+                f"{invitation_field}.expires_at": expires_at,
+                f"{invitation_field}.deadline_source": deadline_source,
+            }
+        },
+    )
+
+
 def set_candidate_email_sent(
     email: str, interview_type: str, company_id: str | None = None, job_id: str | None = None,
 ) -> None:
@@ -1592,3 +1617,68 @@ def find_recent_email_log(
         "status": "sent",
         "sent_at": {"$gte": cutoff},
     })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RESUME JOBS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def insert_resume_job(doc: dict) -> None:
+    _resume_jobs.insert_one(doc)
+
+
+def claim_resume_job() -> dict | None:
+    return _resume_jobs.find_one_and_update(
+        {"status": "queued"},
+        {"$set": {"status": "processing", "claimed_at": datetime.now(timezone.utc)}, "$inc": {"attempts": 1}},
+        sort=[("created_at", 1)],
+        return_document=ReturnDocument.AFTER,
+    )
+
+
+def update_resume_job(job_id, update: dict) -> None:
+    _resume_jobs.update_one({"_id": job_id}, {"$set": update})
+
+
+def get_resume_jobs_by_batch(batch_id: str, company_id: str | None = None) -> list[dict]:
+    query = {"batchId": batch_id}
+    if company_id:
+        query["company_id"] = company_id
+    return list(_resume_jobs.find(query, {"spool_path": 0}).sort("created_at", 1))
+
+
+def get_active_resume_batches(company_id: str) -> list[dict]:
+    pipeline = [
+        {"$match": {"company_id": company_id, "status": {"$in": ["queued", "processing"]}}},
+        {"$group": {
+            "_id": "$batchId",
+            "total": {"$sum": 1},
+            "created_at": {"$min": "$created_at"},
+        }},
+        {"$sort": {"created_at": -1}},
+    ]
+    batches = []
+    for row in _resume_jobs.aggregate(pipeline):
+        bid = row["_id"]
+        all_jobs = list(_resume_jobs.find({"batchId": bid}, {"spool_path": 0}).sort("created_at", 1))
+        statuses = [j["status"] for j in all_jobs]
+        batches.append({
+            "batchId": bid,
+            "status": "processing" if any(s == "processing" for s in statuses) else "queued",
+            "total": len(all_jobs),
+            "done": sum(1 for s in statuses if s == "done"),
+            "failed": sum(1 for s in statuses if s == "failed"),
+            "created_at": row["created_at"],
+            "jobs": all_jobs,
+        })
+    return batches
+
+
+def requeue_stale_resume_jobs(lease_seconds: int = 300) -> int:
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=lease_seconds)
+    result = _resume_jobs.update_many(
+        {"status": "processing", "claimed_at": {"$lt": cutoff}},
+        {"$set": {"status": "queued", "claimed_at": None}},
+    )
+    return result.modified_count

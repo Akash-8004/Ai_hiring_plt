@@ -35,8 +35,8 @@ export function CandidateResumePreview({ candidate, onClose }) {
           <div className="warning-banner-body">
             <strong>Unparseable Document (No Readable Text Extracted)</strong>
             <p>
-              No readable text could be extracted from this file. The system accepts text-based <strong>PDF, DOCX, and TXT</strong> files.
-              Scanned or image-only PDFs without an embedded text layer cannot be parsed. Please re-upload a text-based version of this candidate's resume.
+              No readable text could be extracted from this file. The system accepts <strong>PDF, DOCX, TXT, PNG, JPG, and JPEG</strong> files.
+              Please ensure the file is clear, readable, and not blank or corrupted.
             </p>
           </div>
         </div>

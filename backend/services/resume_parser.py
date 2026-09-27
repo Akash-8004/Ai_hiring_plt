@@ -1,3 +1,4 @@
+import logging
 import re
 import json
 import os
@@ -9,6 +10,9 @@ from typing import BinaryIO
 
 from backend.core.models import ParsedResume
 from backend.config import load_env
+from backend.services.ocr import OCR_MIME_BY_EXT, ocr_document
+
+logger = logging.getLogger(__name__)
 
 
 KNOWN_SKILLS = {
@@ -138,25 +142,40 @@ def parse_resume_text_with_ai(file_name: str, text: str) -> ParsedResume:
         return parse_resume_text(file_name, text)
 
 
-def parse_uploaded_resume_with_ai(uploaded_file: BinaryIO) -> ParsedResume:
+def parse_uploaded_resume_with_ai(uploaded_file: BinaryIO, raw_bytes: bytes | None = None) -> ParsedResume:
     file_name = getattr(uploaded_file, "name", "uploaded_resume.txt")
     suffix = Path(file_name).suffix.lower()
-    if suffix == ".txt":
+    ocr_used = False
+    if suffix in OCR_MIME_BY_EXT and suffix not in (".pdf",):
+        contents = raw_bytes or uploaded_file.read()
+        text = ocr_document(file_name, contents)
+        ocr_used = bool(text and not _is_text_empty(text))
+        if not ocr_used:
+            text = ""
+    elif suffix == ".txt":
         text = uploaded_file.read().decode("utf-8", errors="ignore")
     elif suffix == ".docx":
         text = _read_docx(uploaded_file)
     elif suffix == ".pdf":
         text = _read_pdf(uploaded_file)
+        if _is_text_empty(text):
+            contents = raw_bytes or uploaded_file.read()
+            ocr_text = ocr_document(file_name, contents)
+            if ocr_text and not _is_text_empty(ocr_text):
+                text = ocr_text
+                ocr_used = True
     else:
         text = uploaded_file.read().decode("utf-8", errors="ignore")
-    # Early-exit: flag the candidate instead of sending blank text to the AI
     if _is_text_empty(text):
         return _empty_resume(file_name, text)
-    return parse_resume_text_with_ai(file_name, text)
+    resume = parse_resume_text_with_ai(file_name, text)
+    if ocr_used and resume.parsing_provider not in {"none", "regex-fallback"}:
+        resume.parsing_provider = f"{resume.parsing_provider}-ocr"
+    return resume
 
 
 def _extract_with_gemini(file_name: str, text: str, api_key: str) -> dict:
-    model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
     prompt = (
         "Extract resume information and return only JSON. Include every explicitly "
         "mentioned skill, tool, technology, language, framework, database, cloud "
@@ -321,8 +340,30 @@ def _read_docx(uploaded_file: BinaryIO) -> str:
         from docx import Document
 
         document = Document(uploaded_file)
-        return "\n".join(paragraph.text for paragraph in document.paragraphs)
+        parts = []
+        for elem in document.element.body.iter():
+            if elem.tag.endswith("}p") or elem.tag.endswith("}tr"):
+                parts.append("\n")
+            elif elem.tag.endswith("}tab"):
+                parts.append(" ")
+            elif elem.tag.endswith("}t"):
+                if elem.text:
+                    parts.append(elem.text)
+        body_text = "".join(parts)
+        for section in document.sections:
+            for area in (section.header, section.footer):
+                if area:
+                    for paragraph in area.paragraphs:
+                        if paragraph.text and paragraph.text.strip():
+                            body_text += "\n" + paragraph.text
+                    for table in getattr(area, "tables", []):
+                        for row in table.rows:
+                            for cell in row.cells:
+                                if cell.text and cell.text.strip():
+                                    body_text += "\n" + cell.text
+        return body_text
     except Exception:
+        logger.exception("Failed to read DOCX: %s", getattr(uploaded_file, "name", "unknown"))
         return ""
 
 
@@ -333,6 +374,7 @@ def _read_pdf(uploaded_file: BinaryIO) -> str:
         reader = PdfReader(uploaded_file)
         return "\n".join(page.extract_text() or "" for page in reader.pages)
     except Exception:
+        logger.exception("Failed to read PDF: %s", getattr(uploaded_file, "name", "unknown"))
         return ""
 
 

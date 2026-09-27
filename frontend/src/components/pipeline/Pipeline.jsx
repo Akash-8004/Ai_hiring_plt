@@ -133,11 +133,18 @@ export function Pipeline({ candidates, onInvite, onRefresh, onDeadline, deadline
               className="primary-button"
               onClick={async () => {
                 const invitees = (technicalRoundActive ? hrPassed : shortlisted)
-                  .filter((c) => !(technicalRoundActive ? techInvitedEmails : hrInvitedEmails).has(c.Email))
+                  .filter((c) => !c.late_entry)
+                  .filter((c) => !(technicalRoundActive ? techInvitedEmails : hrInvitedEmails).has(c.Email));
                 await Promise.all(invitees.map((c) => onInvite(c.Email, technicalRoundActive ? "technical" : "hr")));
                 if (onRefresh) await onRefresh();
               }}
-              disabled={busy || !activeRoundHasDeadline || !(technicalRoundActive ? hrPassed : shortlisted).filter((c) => !(technicalRoundActive ? techInvitedEmails : hrInvitedEmails).has(c.Email)).length}
+              disabled={
+                busy ||
+                !activeRoundHasDeadline ||
+                !(technicalRoundActive ? hrPassed : shortlisted)
+                  .filter((c) => !c.late_entry)
+                  .filter((c) => !(technicalRoundActive ? techInvitedEmails : hrInvitedEmails).has(c.Email)).length
+              }
             >
               {busy ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
               {technicalRoundActive ? "Invite for Technical" : "Invite for HR"}

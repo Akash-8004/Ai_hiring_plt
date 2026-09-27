@@ -2,13 +2,14 @@ import array
 import asyncio
 import base64
 import json
+import logging
 import math
 import os
 import re
 import secrets
 import time
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,8 @@ from backend.auth.security import (
 from backend.auth.routes import router as auth_router
 from backend.admin.routes import admin_router, company_router
 from backend.leads.routes import router as leads_router
+
+logger = logging.getLogger(__name__)
 
 
 _is_dev = os.getenv("ENV", "production").lower() == "dev"
@@ -112,7 +115,26 @@ hr_evaluator = HREvaluator()
 technical_evaluator = TechnicalInterviewEvaluator()
 question_processor = QuestionProcessor()
 
-ALLOWED_RESUME_EXTENSIONS = {".pdf", ".docx", ".txt"}
+ALLOWED_RESUME_EXTENSIONS = {".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg"}
+MAX_UPLOAD_MB = 25
+
+_MAGIC_BYTES = {
+    ".pdf": b"%PDF-",
+    ".png": b"\x89PNG",
+    ".jpg": b"\xff\xd8\xff",
+    ".jpeg": b"\xff\xd8\xff",
+}
+
+
+def _validate_magic_bytes(file_name: str, contents: bytes, ext: str) -> str | None:
+    expected = _MAGIC_BYTES.get(ext)
+    if expected and not contents[:len(expected)].startswith(expected):
+        if ext == ".pdf" and contents[:4] == b"PK\x03\x04":
+            return f"'{file_name}' appears to be a ZIP/DOCX file, not a PDF."
+        return f"'{file_name}' does not appear to be a valid {ext.upper().lstrip('.')} file."
+    if ext == ".docx" and not contents[:4] == b"PK\x03\x04":
+        return f"'{file_name}' does not appear to be a valid DOCX file."
+    return None
 
 
 # ── Startup: seed Super Admin ──────────────────────────────────────────────
@@ -160,6 +182,18 @@ def seed_super_admin():
 
     database.backfill_job_drives()
     database.normalize_user_emails()
+
+
+@app.on_event("startup")
+async def _start_resume_workers():
+    from backend.services.resume_jobs import start_workers
+    await start_workers(app)
+
+
+@app.on_event("shutdown")
+async def _stop_resume_workers():
+    from backend.services.resume_jobs import stop_workers
+    await stop_workers()
 
 
 # ── Pydantic Models ────────────────────────────────────────────────────────
@@ -609,12 +643,13 @@ def add_manual_resume(
     return _workspace_payload(company_id, user, job_id=job_id)
 
 
-@app.post("/api/resumes/upload")
+@app.post("/api/resumes/upload", status_code=202)
 async def upload_resumes(
     files: list[UploadFile] = File(...),
     user: dict = Depends(require_permission("manage_resumes")),
     request: Request = None,
 ) -> dict[str, Any]:
+    from backend.services.resume_jobs import kick_workers
     company_id = str(user["company_id"]) if user.get("company_id") else None
     job_id = _active_drive_id(company_id)
     if not job_id:
@@ -622,29 +657,81 @@ async def upload_resumes(
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
-    for file in files:
-        suffix = Path(file.filename or "").suffix.lower()
-        if suffix not in ALLOWED_RESUME_EXTENSIONS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported file type '{suffix or 'unknown'}' for file '{file.filename}'. Allowed formats: PDF, DOCX, TXT.",
-            )
+    batch_id = secrets.token_urlsafe(16)
+    accepted = []
+    rejected = []
 
-    file_names = []
     for file in files:
-        contents = await file.read()
-        resume = await asyncio.to_thread(_parse_uploaded_bytes, file.filename or "resume.txt", contents)
-        _enforce_candidate_limit(company_id)
-        database.upsert_candidate(resume, company_id=company_id, job_id=job_id)
-        file_names.append(file.filename)
+        fname = file.filename or "resume.txt"
+        suffix = Path(fname).suffix.lower()
+        if suffix not in ALLOWED_RESUME_EXTENSIONS:
+            rejected.append({"file_name": fname, "error": f"Unsupported file type '{suffix or 'unknown'}'. Allowed: PDF, DOCX, TXT, PNG, JPG, JPEG."})
+            continue
+        try:
+            contents = await file.read()
+        except Exception:
+            rejected.append({"file_name": fname, "error": "Failed to read file."})
+            continue
+        if len(contents) > MAX_UPLOAD_MB * 1024 * 1024:
+            rejected.append({"file_name": fname, "error": f"File exceeds {MAX_UPLOAD_MB} MB limit."})
+            continue
+        if not contents:
+            rejected.append({"file_name": fname, "error": "File is empty."})
+            continue
+        magic_err = _validate_magic_bytes(fname, contents, suffix)
+        if magic_err:
+            rejected.append({"file_name": fname, "error": magic_err})
+            continue
+        try:
+            spool_path = _spool_file(batch_id, fname, contents)
+        except Exception:
+            rejected.append({"file_name": fname, "error": "Failed to spool file."})
+            continue
+        job_doc = {
+            "batchId": batch_id,
+            "company_id": company_id,
+            "job_id": job_id,
+            "file_name": fname,
+            "ext": suffix,
+            "size_bytes": len(contents),
+            "spool_path": str(spool_path),
+            "status": "queued",
+            "stage": "queued",
+            "ocr_used": False,
+            "error": None,
+            "attempts": 0,
+            "candidate_email": None,
+            "candidate_name": None,
+            "created_at": datetime.now(timezone.utc),
+            "claimed_at": None,
+            "finished_at": None,
+            "expireAt": None,
+            "actor": {"user_id": str(user.get("_id") or ""), "email": user.get("email")},
+        }
+        database.insert_resume_job(job_doc)
+        accepted.append(fname)
+
     log_activity(
         action="candidate.bulk_uploaded",
         category="candidate",
         actor=user,
-        metadata={"count": len(files), "file_names": file_names},
+        metadata={"count": len(accepted), "file_names": accepted, "rejected": len(rejected), "batch_id": batch_id},
         request=request,
     )
-    return _workspace_payload(company_id, user, job_id=job_id)
+    kick_workers()
+    return {"batchId": batch_id, "accepted": len(accepted), "rejected": rejected}
+
+
+def _spool_file(batch_id: str, file_name: str, contents: bytes) -> Path:
+    # NOTE: temp_files/resumes/<batchId>/ is two levels deep, so
+    # serve_local_recording (which only joins one level) cannot serve it.
+    # Do not add a serving route for resume spool files.
+    safe_name = Path(file_name).name
+    spool_dir = Path(__file__).resolve().parent.parent / "temp_files" / "resumes" / batch_id
+    spool_dir.mkdir(parents=True, exist_ok=True)
+    spool_path = spool_dir / safe_name
+    spool_path.write_bytes(contents)
+    return spool_path
 
 
 # ── Invitation ──────────────────────────────────────────────────────────────
@@ -698,6 +785,7 @@ OVERRIDE_REASONS = {
     "role_priority": "Urgent / priority role",
 }
 MAX_OVERRIDE_NOTE = 500
+PER_CANDIDATE_MAX_WINDOW_DAYS = int(os.getenv("PER_CANDIDATE_MAX_WINDOW_DAYS", "14"))
 
 
 @app.post("/api/candidates/{email}/invite")
@@ -707,6 +795,7 @@ def invite_candidate(
     send_email: bool = True,
     override_reason: str = "",
     override_note: str = "",
+    deadline: str = "",
     user: dict = Depends(require_permission("conduct_interviews")),
     request: Request = None,
 ) -> dict[str, Any]:
@@ -746,14 +835,24 @@ def invite_candidate(
     deadline_field = (
         "hr_deadline" if interview_type == "hr" else "technical_deadline"
     )
-    deadline = job_doc.get(deadline_field) if job_doc else None
-    if not deadline:
+    drive_deadline = job_doc.get(deadline_field) if job_doc else None
+    per_candidate = _normalise_deadline(deadline) if deadline else None
+    effective = per_candidate or drive_deadline
+
+    if not effective:
         raise HTTPException(
             status_code=400,
             detail=f"Set a {interview_type} deadline before sending invitations.",
         )
-    if _deadline_has_passed(deadline):
+    if _deadline_has_passed(effective):
         raise HTTPException(status_code=400, detail=f"The {interview_type} deadline has passed.")
+    if per_candidate:
+        cap = datetime.now(timezone.utc) + timedelta(days=PER_CANDIDATE_MAX_WINDOW_DAYS)
+        if _parse_deadline(per_candidate) > cap:
+            raise HTTPException(
+                status_code=400,
+                detail=f"A per-candidate window cannot extend more than {PER_CANDIDATE_MAX_WINDOW_DAYS} days from now.",
+            )
     if interview_type == "technical" and _deadline_is_active(job_doc.get("hr_deadline")):
         raise HTTPException(status_code=403, detail="Technical round unlocks after the HR deadline passes.")
 
@@ -839,12 +938,26 @@ def invite_candidate(
             "type": interview_type,
             "link": _build_interview_link(token, interview_type),
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "expires_at": deadline,
+            "expires_at": effective,
+            "deadline_source": "per_candidate" if per_candidate else "drive",
         }
         if interview_type == "hr":
             database.set_candidate_hr_invitation(email, invitation, company_id, job_id)
         else:
             database.set_candidate_invitation(email, invitation, company_id, job_id)
+    else:
+        token = invitation.get("token")
+        if per_candidate and per_candidate != invitation.get("expires_at"):
+            if _deadline_has_passed(invitation.get("expires_at")):
+                raise HTTPException(
+                    status_code=400,
+                    detail="This invitation window has already expired and cannot be amended. Use 'Still Invite' to issue an override if permitted.",
+                )
+            database.set_candidate_invitation_expiry(
+                email, interview_type, per_candidate, "per_candidate", company_id, job_id
+            )
+            invitation["expires_at"] = per_candidate
+            invitation["deadline_source"] = "per_candidate"
     token = invitation["token"]
     log_activity(
         action=(
@@ -859,6 +972,8 @@ def invite_candidate(
         target_label=email,
         metadata={
             "interview_type": interview_type,
+            "deadline_source": invitation.get("deadline_source", "per_candidate" if per_candidate else "drive"),
+            "deadline": invitation.get("expires_at", effective),
             **(
                 {
                     "override": True,
@@ -1461,8 +1576,10 @@ def _workspace_payload(
             result.candidate.email, company_id, effective_job_id
         ) or {}
         row["pipelineStage"] = doc.get("pipelineStage", "uploaded")
-        row["invitation"] = _normalise_invitation(doc.get("invitation"))
-        row["hr_invitation"] = _normalise_invitation(doc.get("hr_invitation"))
+        hr_inv = doc.get("hr_invitation") or {}
+        tech_inv = doc.get("invitation") or {}
+        row["invitation"] = _normalise_invitation(tech_inv)
+        row["hr_invitation"] = _normalise_invitation(hr_inv)
         row["interview"] = doc.get("interview")
         row["technical_interview"] = doc.get("technical_interview")
         row["hr_interview"] = doc.get("hr_interview")
@@ -1470,6 +1587,15 @@ def _workspace_payload(
         row["email_sent"] = doc.get("email_sent") or {}
         row["overrides"] = doc.get("overrides") or []
         row["tech_round_locked"] = _deadline_is_active(hr_deadline)
+        row["late_entry"] = bool(hr_deadline_passed and not hr_inv.get("token"))
+        row["deadline_source"] = {
+            "hr": hr_inv.get("deadline_source", "drive" if hr_inv.get("token") else None),
+            "technical": tech_inv.get("deadline_source", "drive" if tech_inv.get("token") else None),
+        }
+        row["per_candidate_expires_at"] = {
+            "hr": hr_inv.get("expires_at") if hr_inv.get("deadline_source") == "per_candidate" else None,
+            "technical": tech_inv.get("expires_at") if tech_inv.get("deadline_source") == "per_candidate" else None,
+        }
         row["recording"] = (doc.get("technical_interview") or {}).get("recording") or (doc.get("hr_interview") or {}).get("recording")
         rows.append(row)
 
@@ -1814,13 +1940,13 @@ def _parse_uploaded_bytes(file_name: str, contents: bytes) -> ParsedResume:
     if suffix not in ALLOWED_RESUME_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file format '{suffix or 'unknown'}'. Allowed formats: PDF, DOCX, TXT.",
+            detail=f"Unsupported file format '{suffix or 'unknown'}'. Allowed formats: PDF, DOCX, TXT, PNG, JPG, JPEG.",
         )
     stream = BytesIO(contents)
     stream.name = file_name
 
-    if suffix in {".docx", ".pdf"}:
-        return parse_uploaded_resume_with_ai(stream)
+    if suffix in {".docx", ".pdf", ".png", ".jpg", ".jpeg"}:
+        return parse_uploaded_resume_with_ai(stream, raw_bytes=contents)
     return parse_resume_text_with_ai(file_name, contents.decode("utf-8", errors="ignore"))
 
 
@@ -1839,6 +1965,46 @@ def _enforce_candidate_limit(company_id: str | None) -> None:
             status_code=403,
             detail=f"Candidate limit reached ({count}/{max_candidates}). Upgrade your plan to add more candidates.",
         )
+
+
+# ── Resume upload batch status ──────────────────────────────────────────────
+
+@app.get("/api/resumes/upload/active")
+def active_resume_batches(
+    user: dict = Depends(require_permission("manage_resumes")),
+) -> dict[str, Any]:
+    company_id = str(user["company_id"]) if user.get("company_id") else None
+    if not company_id:
+        return {"batches": []}
+    batches = database.get_active_resume_batches(company_id)
+    return {"batches": [_clean_mongo(b) for b in batches]}
+
+
+@app.get("/api/resumes/upload/{batch_id}")
+def resume_batch_status(
+    batch_id: str,
+    user: dict = Depends(require_permission("manage_resumes")),
+) -> dict[str, Any]:
+    company_id = str(user["company_id"]) if user.get("company_id") else None
+    jobs = database.get_resume_jobs_by_batch(batch_id, company_id)
+    if not jobs:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    cleaned = [_clean_mongo(j) for j in jobs]
+    statuses = [j["status"] for j in cleaned]
+    if all(s in ("done", "failed") for s in statuses):
+        batch_status = "complete"
+    elif any(s == "processing" for s in statuses):
+        batch_status = "processing"
+    else:
+        batch_status = "queued"
+    return {
+        "batchId": batch_id,
+        "status": batch_status,
+        "total": len(cleaned),
+        "done": sum(1 for s in statuses if s == "done"),
+        "failed": sum(1 for s in statuses if s == "failed"),
+        "jobs": cleaned,
+    }
 
 
 # ── Static frontend hosting (production) ────────────────────────────────────

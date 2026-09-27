@@ -27,6 +27,9 @@ import { PrivacyPolicyPage } from "./components/marketing/PrivacyPolicyPage";
 import { TermsPage } from "./components/marketing/TermsPage";
 import { useAuth } from "./hooks/useAuth";
 import { apiFetchJson } from "./utils/api";
+import { ALLOWED_RESUME_EXTENSIONS } from "./constants";
+import { useUploadProgress } from "./hooks/useUploadProgress";
+import { UploadProgress } from "./components/resumes/UploadProgress";
 
 /* ── BUG 33 fix: map URL segment ↔ view key ─────────────────────────────── */
 const VALID_VIEWS = ["dashboard", "job", "resumes", "pipeline", "usage", "team"];
@@ -52,6 +55,18 @@ function App() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+
+  const {
+    activeBatch,
+    isPolling: isUploadPolling,
+    pollError,
+    startTrackingBatch,
+    clearBatch,
+  } = useUploadProgress({
+    onComplete: () => {
+      refresh(activeJobId);
+    },
+  });
 
   // BUG 33: derive active view from the URL instead of local state
   const activeView = viewFromPath(location.pathname);
@@ -191,12 +206,11 @@ function App() {
 
   async function uploadFiles(files) {
     if (!files.length) return;
-    const allowed = [".pdf", ".docx", ".txt"];
     const invalid = Array.from(files).find(
-      (f) => !allowed.some((ext) => (f.name || "").toLowerCase().endsWith(ext))
+      (f) => !ALLOWED_RESUME_EXTENSIONS.some((ext) => (f.name || "").toLowerCase().endsWith(ext))
     );
     if (invalid) {
-      setError(`Unsupported file type for "${invalid.name}". Only PDF, DOCX, and TXT files are accepted.`);
+      setError(`Unsupported file type for "${invalid.name}". Allowed formats: PDF, DOCX, TXT, PNG, JPG, JPEG.`);
       return;
     }
     setSaving(true);
@@ -208,9 +222,13 @@ function App() {
         method: "POST",
         body: form,
       });
-      setWorkspace(data);
-      setActiveJobId(data.job_id || null);
-      navigate("/app/dashboard");
+      if (data?.batchId) {
+        startTrackingBatch(data.batchId);
+      }
+      if (data?.rejected && data.rejected.length > 0) {
+        const rejectedSummary = data.rejected.map((r) => `${r.file_name}: ${r.error}`).join("\n");
+        setError(`Some files were rejected:\n${rejectedSummary}`);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -232,7 +250,7 @@ function App() {
     }
   }
 
-  async function inviteCandidate(email, interviewType = "technical", override = null) {
+  async function inviteCandidate(email, interviewType = "technical", override = null, deadline = "") {
     setSaving(true);
     setError("");
     try {
@@ -242,6 +260,8 @@ function App() {
       });
       if (override?.reason) params.set("override_reason", override.reason);
       if (override?.note) params.set("override_note", override.note);
+      const effectiveDeadline = deadline || override?.deadline;
+      if (effectiveDeadline) params.set("deadline", effectiveDeadline);
       const data = await apiFetchJson(
         `/api/candidates/${encodeURIComponent(email)}/invite?${params.toString()}`,
         { method: "POST" }
@@ -355,19 +375,24 @@ function App() {
         )}
 
         {effectiveView === "dashboard" && (
-          <Dashboard
-            workspace={workspace}
-            candidates={candidates}
-            statusFilter={statusFilter}
-            query={query}
-            onStatusFilter={setStatusFilter}
-            onQuery={setQuery}
-            onCandidate={setSelectedCandidate}
-            onViewDetails={setPreviewCandidate}
-            onGoToJob={canManageJobs ? (activeJobId ? () => openEditDrive(activeJobId) : openCreateDrive) : undefined}
-            onGoToUpload={canManageResumes ? () => navigate("/app/resumes") : undefined}
-            {...driveProps}
-          />
+          <>
+            {activeBatch ? (
+              <UploadProgress batch={activeBatch} onDismiss={clearBatch} pollError={pollError} />
+            ) : null}
+            <Dashboard
+              workspace={workspace}
+              candidates={candidates}
+              statusFilter={statusFilter}
+              query={query}
+              onStatusFilter={setStatusFilter}
+              onQuery={setQuery}
+              onCandidate={setSelectedCandidate}
+              onViewDetails={setPreviewCandidate}
+              onGoToJob={canManageJobs ? (activeJobId ? () => openEditDrive(activeJobId) : openCreateDrive) : undefined}
+              onGoToUpload={canManageResumes ? () => navigate("/app/resumes") : undefined}
+              {...driveProps}
+            />
+          </>
         )}
 
         {effectiveView === "job" && (
@@ -390,7 +415,14 @@ function App() {
         )}
 
         {effectiveView === "resumes" && (
-          <ResumeIntake onManualResume={addManualResume} onUpload={uploadFiles} saving={saving} />
+          <ResumeIntake
+            onManualResume={addManualResume}
+            onUpload={uploadFiles}
+            saving={saving || isUploadPolling}
+            uploadBatch={activeBatch}
+            onDismissBatch={clearBatch}
+            pollError={pollError}
+          />
         )}
 
         {effectiveView === "pipeline" && (

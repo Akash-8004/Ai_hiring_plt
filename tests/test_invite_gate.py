@@ -61,7 +61,7 @@ def _candidate(**over):
 
 def _call(candidate, interview_type, job=None, **kwargs):
     """Invoke the endpoint directly with the database and side effects stubbed."""
-    calls = {"invites": [], "overrides": [], "audit": []}
+    calls = {"invites": [], "overrides": [], "amends": [], "audit": []}
     job_doc = dict(job if job is not None else JOB)
 
     with mock.patch.object(main, "_resolve_effective_job_id", return_value="j1"), \
@@ -71,6 +71,8 @@ def _call(candidate, interview_type, job=None, **kwargs):
                            side_effect=lambda e, i, c=None, j=None: calls["invites"].append(("technical", i))), \
          mock.patch.object(main.database, "set_candidate_hr_invitation",
                            side_effect=lambda e, i, c=None, j=None: calls["invites"].append(("hr", i))), \
+         mock.patch.object(main.database, "set_candidate_invitation_expiry",
+                           side_effect=lambda e, t, exp, src="per_candidate", c=None, j=None: calls["amends"].append((t, exp, src))), \
          mock.patch.object(main.database, "record_candidate_override",
                            side_effect=lambda e, entry, c=None, j=None: calls["overrides"].append(entry)), \
          mock.patch.object(main.database, "set_candidate_email_sent"), \
@@ -363,6 +365,191 @@ def test_candidate_missing_from_active_drive_is_rejected():
             assert "current job drive" in str(exc.detail)
         else:
             raise AssertionError("must not fall back to a candidate from another drive")
+
+
+# ── Per-candidate interview windows (Late entries) ──────────────────────────
+
+def test_per_candidate_deadline_unblocks_hr_invite():
+    """A per-candidate deadline unblocks that candidate's HR invite even if drive HR deadline passed."""
+    candidate = _candidate(cached_score={"total_score": 90}, hr_interview=None, pipelineStage="uploaded")
+    closed_hr_job = dict(JOB, hr_deadline=PAST)
+    future_deadline = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    _, calls = _call(candidate, "hr", job=closed_hr_job, deadline=future_deadline)
+    assert calls["invites"], "HR invitation must be issued"
+    inv_type, inv_payload = calls["invites"][0]
+    assert inv_type == "hr"
+    assert inv_payload["expires_at"] == future_deadline
+    assert inv_payload["deadline_source"] == "per_candidate"
+
+
+def test_job_deadlines_remain_byte_identical_after_per_candidate_invite():
+    """Drive-level hr_deadline and technical_deadline are untouched by per-candidate invites."""
+    original_job = {
+        "job_id": "j1",
+        "threshold": 80,
+        "hr_deadline": PAST,
+        "technical_deadline": FUTURE,
+    }
+    candidate = _candidate(cached_score={"total_score": 90}, hr_interview=None, pipelineStage="uploaded")
+    future_deadline = (datetime.now(timezone.utc) + timedelta(days=5)).isoformat()
+
+    with mock.patch.object(main.database, "set_job_deadline") as mock_set_job_deadline:
+        _, calls = _call(candidate, "hr", job=original_job, deadline=future_deadline)
+        assert mock_set_job_deadline.call_count == 0, "set_job_deadline must NEVER be called"
+
+    assert original_job["hr_deadline"] == PAST
+    assert original_job["technical_deadline"] == FUTURE
+
+
+def test_default_invite_without_deadline_remains_blocked_when_drive_deadline_passed():
+    """Default path (no deadline parameter) is still blocked at 842 when drive deadline passed."""
+    candidate = _candidate(cached_score={"total_score": 90}, hr_interview=None, pipelineStage="uploaded")
+    closed_hr_job = dict(JOB, hr_deadline=PAST)
+    try:
+        _call(candidate, "hr", job=closed_hr_job)
+    except main.HTTPException as exc:
+        assert _status(exc) == 400
+        assert "The hr deadline has passed." in str(exc.detail)
+    else:
+        raise AssertionError("expected invite to be blocked when drive deadline has passed")
+
+
+def test_per_candidate_max_window_days_cap_rejects_overlong_window():
+    """A per-candidate window exceeding PER_CANDIDATE_MAX_WINDOW_DAYS is rejected with 400."""
+    candidate = _candidate(cached_score={"total_score": 90}, hr_interview=None, pipelineStage="uploaded")
+    closed_hr_job = dict(JOB, hr_deadline=PAST)
+    too_far = (datetime.now(timezone.utc) + timedelta(days=20)).isoformat()
+    try:
+        _call(candidate, "hr", job=closed_hr_job, deadline=too_far)
+    except main.HTTPException as exc:
+        assert _status(exc) == 400
+        assert "cannot extend more than" in str(exc.detail)
+    else:
+        raise AssertionError("expected 400 when deadline exceeds max window cap")
+
+
+def test_past_per_candidate_deadline_rejected():
+    """A past per-candidate deadline is rejected by _normalise_deadline with 400."""
+    candidate = _candidate(cached_score={"total_score": 90}, hr_interview=None, pipelineStage="uploaded")
+    closed_hr_job = dict(JOB, hr_deadline=PAST)
+    try:
+        _call(candidate, "hr", job=closed_hr_job, deadline=PAST)
+    except main.HTTPException as exc:
+        assert _status(exc) == 400
+        assert "Deadline cannot be in the past" in str(exc.detail)
+    else:
+        raise AssertionError("expected 400 for past per-candidate deadline")
+
+
+def test_amend_updates_expires_at_without_changing_pipeline_stage():
+    """Amend updates expires_at on an existing token without calling set_candidate_hr_invitation / changing pipelineStage."""
+    old_future = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+    new_future = (datetime.now(timezone.utc) + timedelta(days=5)).isoformat()
+    candidate = _candidate(
+        cached_score={"total_score": 90},
+        hr_invitation={"token": "existing-token-123", "expires_at": old_future, "deadline_source": "drive"},
+        pipelineStage="custom_stage_preserved",
+    )
+    closed_hr_job = dict(JOB, hr_deadline=PAST)
+    _, calls = _call(candidate, "hr", job=closed_hr_job, deadline=new_future)
+    assert len(calls["amends"]) == 1, "set_candidate_invitation_expiry must be called"
+    inv_type, exp, src = calls["amends"][0]
+    assert inv_type == "hr"
+    assert exp == new_future
+    assert src == "per_candidate"
+    assert len(calls["invites"]) == 0, "set_candidate_hr_invitation must NOT be called on amend"
+
+
+def test_amend_refused_once_window_closed():
+    """Amend is refused with 400 once the candidate's window has already expired."""
+    candidate = _candidate(
+        cached_score={"total_score": 90},
+        hr_invitation={"token": "existing-token-123", "expires_at": PAST, "deadline_source": "drive"},
+    )
+    new_future = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    try:
+        _call(candidate, "hr", job=JOB, deadline=new_future)
+    except main.HTTPException as exc:
+        assert _status(exc) == 400
+        assert "already expired and cannot be amended" in str(exc.detail)
+    else:
+        raise AssertionError("expected 400 when trying to amend expired invitation")
+
+
+def test_workspace_payload_includes_deadline_source_and_late_entry():
+    """deadline_source == 'per_candidate' and late_entry appear correctly in workspace row payload."""
+    candidate_doc = _candidate(
+        email="late@example.com",
+        hr_invitation=None,
+        invitation=None,
+    )
+    mock_resume = mock.MagicMock()
+    mock_resume.email = "late@example.com"
+    mock_resume.file_name = "late.pdf"
+    mock_resume.linkedin = ""
+    mock_resume.github = ""
+    mock_resume.raw_text = "Experienced Developer"
+    mock_resume.other_links = []
+    mock_resume.education = []
+    mock_resume.skills = ["Python"]
+    mock_resume.job_title = "Developer"
+    mock_resume.location = "Remote"
+    mock_resume.summary = ""
+    mock_resume.parsing_provider = "gemini"
+    mock_resume.uploaded_at = datetime.now(timezone.utc)
+
+    mock_score = mock.MagicMock()
+    mock_score.breakdown = {}
+
+    mock_result = mock.MagicMock()
+    mock_result.candidate = mock_resume
+    mock_result.score = mock_score
+    mock_result.to_row.return_value = {
+        "Name": "Late Candidate",
+        "Email": "late@example.com",
+        "Score": 85,
+        "Status": "Shortlisted",
+    }
+
+    job_doc = {"job_id": "j1", "hr_deadline": PAST, "technical_deadline": FUTURE}
+    with mock.patch.object(main, "_resolve_effective_job_id", return_value="j1"), \
+         mock.patch.object(main.database, "get_job_doc", return_value=job_doc), \
+         mock.patch.object(main.database, "get_job_by_id", return_value=main.DEFAULT_JOB), \
+         mock.patch.object(main.database, "load_candidates", return_value=[mock_resume]), \
+         mock.patch.object(main.database, "get_candidate_doc", return_value=candidate_doc), \
+         mock.patch.object(main.database, "get_company_by_id", return_value={"name": "Acme", "plan": "starter"}), \
+         mock.patch.object(main.database, "list_jobs", return_value=[]), \
+         mock.patch.object(main.database, "count_company_users", return_value=1), \
+         mock.patch.object(main.database, "get_company_credits", return_value=100), \
+         mock.patch.object(main.database, "get_plan_prices", return_value={}), \
+         mock.patch.object(main, "_jd_requests_for_user", return_value=[]), \
+         mock.patch.object(main, "_auto_fail_missed_deadlines"), \
+         mock.patch.object(main, "score_candidates_for_drive", return_value=[mock_result]), \
+         mock.patch.object(main, "compute_drive_metrics", return_value={}):
+        payload = main._workspace_payload("c1", USER, job_id="j1")
+
+    assert len(payload["candidates"]) == 1
+    row = payload["candidates"][0]
+    assert row["late_entry"] is True
+    assert row["deadline_source"]["hr"] is None
+    assert row["deadline_source"]["technical"] is None
+
+
+def test_private_technical_window_does_not_bypass_round_ordering_403():
+    """A private technical window does not bypass the round-ordering 403 when HR deadline is active."""
+    candidate = _candidate(
+        hr_interview={"status": "completed", "decision": "PASS", "score": 90},
+        pipelineStage="hr_passed",
+    )
+    future_tech = (datetime.now(timezone.utc) + timedelta(days=5)).isoformat()
+    job_hr_active = dict(JOB, hr_deadline=FUTURE, technical_deadline=FUTURE)
+    try:
+        _call(candidate, "technical", job=job_hr_active, deadline=future_tech)
+    except main.HTTPException as exc:
+        assert _status(exc) == 403
+        assert "unlocks after the HR deadline passes" in str(exc.detail)
+    else:
+        raise AssertionError("technical invite must be 403 while HR deadline is active")
 
 
 def _main():
