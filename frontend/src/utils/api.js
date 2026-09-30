@@ -4,7 +4,6 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
-// BUG 26: Module-level dedup — only the FIRST 401 triggers logout
 let _unauthorizedFired = false;
 
 export function resetUnauthorizedFlag() {

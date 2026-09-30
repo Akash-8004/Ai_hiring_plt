@@ -7,15 +7,18 @@ clean, structured question list. Falls back to simple line splitting when
 Gemini is unavailable.
 """
 
+import io
 import json
+import logging
 import os
 import re
 import urllib.error
 import urllib.request
-from typing import BinaryIO
 
 from backend.config import load_env
 from backend.services.resume_parser import _read_docx, _read_pdf
+
+logger = logging.getLogger(__name__)
 
 QUESTION_RESTRUCTURE_PROMPT = """
 You are an expert technical interviewer preparing a structured coding question bank.
@@ -67,18 +70,18 @@ class QuestionProcessor:
                     return result
             except Exception as exc:
                 self.last_error = _friendly_error(exc)
+                logger.error("Gemini question processing failed: %r", exc)
         self.last_provider_used = "local"
         return _process_locally(text)
 
-    def process_file(self, uploaded_file: BinaryIO) -> list[dict]:
-        file_name = getattr(uploaded_file, "name", "questions.txt")
+    def process_file(self, file_name: str, contents: bytes) -> list[dict]:
         suffix = os.path.splitext(file_name)[1].lower()
         if suffix == ".docx":
-            text = _read_docx(uploaded_file)
+            text = _read_docx(io.BytesIO(contents))
         elif suffix == ".pdf":
-            text = _read_pdf(uploaded_file)
+            text = _read_pdf(io.BytesIO(contents))
         else:
-            text = uploaded_file.read().decode("utf-8", errors="ignore")
+            text = contents.decode("utf-8", errors="ignore")
         return self.process_text(text)
 
     def _process_with_gemini(self, raw_text: str) -> list[dict]:
@@ -111,6 +114,7 @@ class QuestionProcessor:
             with urllib.request.urlopen(request, timeout=30) as response:
                 raw_response = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
+            logger.error("Gemini API HTTP error %s (model %s)", exc.code, self.model)
             raise RuntimeError(f"Gemini API error {exc.code}") from exc
 
         data = json.loads(raw_response)

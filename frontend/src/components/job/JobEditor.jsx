@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import { Loader2, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { Field } from "../common/Field";
 import { useAuth } from "../../hooks/useAuth";
+import { apiFetch } from "../../utils/api";
+import { apiFetchJson } from "../../utils/api";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
@@ -115,18 +117,31 @@ export function JobEditor({ job, jobId, mode = "edit", onSave, saving, pendingRe
     setProcessing(true);
     setProcessingError("");
     try {
-      const response = await fetch(`${API_BASE}/api/job/questions/process-text`, {
+      const response = await apiFetchJson("/api/job/questions/process-text", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: manualText }),
       });
-      if (!response.ok) throw new Error("Could not process questions");
-      const data = await response.json();
-      if (data.message) setProcessingError(data.message);
-      setQuestions(data.questions);
+      console.info("[questions] processed", {
+        count: response.questions?.length ?? 0,
+        provider: response.provider_used,
+        message: response.message || null,
+      });
+      if (response.message) console.warn("[questions] backend warning:", response.message);
+      if (response.message) setProcessingError(response.message);
+      setQuestions(response.questions);
       setManualText("");
     } catch (err) {
-      setProcessingError(err.message);
+      console.error("[questions] failed", {
+      status: err.status,
+      code: err.code,
+      detail: err.message,
+    });
+    setProcessingError(
+      err.status === 401
+        ? "Your session expired. Please log in and try again."
+        : err.message || "Could not process questions"
+    );
     } finally {
       setProcessing(false);
     }
@@ -140,16 +155,29 @@ export function JobEditor({ job, jobId, mode = "edit", onSave, saving, pendingRe
     const formData = new FormData();
     formData.append("file", file);
     try {
-      const response = await fetch(`${API_BASE}/api/job/questions/process`, {
+      const data = await apiFetchJson("/api/job/questions/process", {
         method: "POST",
         body: formData,
       });
-      if (!response.ok) throw new Error("Could not process questions file");
-      const data = await response.json();
+      console.info("[questions] file processed", {
+        count: data.questions?.length ?? 0,
+        provider: data.provider_used,
+        message: data.message || null,
+      });
+      if (data.message) console.warn("[questions] backend warning:", data.message);
       if (data.message) setProcessingError(data.message);
       setQuestions(data.questions);
     } catch (err) {
-      setProcessingError(err.message);
+      console.error("[questions] file failed", {
+        status: err.status,
+        code: err.code,
+        detail: err.message,
+      });
+      setProcessingError(
+        err.status === 401
+          ? "Your session expired. Please log in and try again."
+          : err.message || "Could not process questions file"
+      );
     } finally {
       setProcessing(false);
       event.target.value = "";

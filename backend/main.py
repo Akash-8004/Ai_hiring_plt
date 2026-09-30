@@ -593,7 +593,24 @@ async def process_questions_file(
             status_code=400,
             detail=f"Unsupported file type '{ext or 'unknown'}'. Allowed formats: PDF, DOCX, TXT.",
         )
-    questions = await asyncio.to_thread(question_processor.process_file, file)
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="The file is empty.")
+    if len(contents) > MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File exceeds the {MAX_UPLOAD_MB} MB limit.",
+        )
+    try:
+        questions = await asyncio.to_thread(
+            question_processor.process_file, file.filename, contents
+        )
+    except Exception as exc:
+        logger.exception("Question file processing failed")
+        raise HTTPException(
+            status_code=400,
+            detail="Could not process the file. Please check the file and try again.",
+        ) from exc
     return {
         "questions": questions,
         "provider_used": question_processor.last_provider_used,
@@ -609,7 +626,14 @@ def process_questions_text(
     """Restructure HR-supplied coding questions from manually pasted text."""
     if not payload.text.strip():
         raise HTTPException(status_code=400, detail="Question text is required.")
-    questions = question_processor.process_text(payload.text)
+    try:
+        questions = question_processor.process_text(payload.text)
+    except Exception as exc:
+        logger.exception("Question text processing failed")
+        raise HTTPException(
+            status_code=400,
+            detail="Could not process the questions. Please try again.",
+        ) from exc
     return {
         "questions": questions,
         "provider_used": question_processor.last_provider_used,
