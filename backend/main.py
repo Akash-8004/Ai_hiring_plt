@@ -1566,9 +1566,64 @@ def _workspace_payload(
         if company_id
         else database.load_candidates()
     )
-    results = score_candidates_for_drive(
-        candidate_resumes, current_job, company_id or "", effective_job_id or ""
-    )
+    # Batch-fetch candidate docs to avoid N+1 lookups
+    candidate_emails = [r.email for r in candidate_resumes]
+    docs_by_email = database.get_candidate_docs_batch(
+        candidate_emails, company_id, effective_job_id
+    ) if candidate_emails else {}
+
+    # Prefer persisted scores; fallback to rescoring if missing
+    def _get_persisted_score(email: str, resume):
+        doc = docs_by_email.get(email) or {}
+        scoring = doc.get("scoring") or {}
+        if scoring.get("score") is not None and scoring.get("breakdown") is not None:
+            return type("Persisted", (), {
+                "score": type("S", (), {
+                    "overall": scoring["score"],
+                    "breakdown": scoring["breakdown"],
+                    "weights": scoring.get("weights") or {},
+                    "explanation": scoring.get("explanation") or "",
+                })(),
+                "to_row": lambda self, r=resume: {
+                    "candidate_id": r.candidate_id,
+                    "name": r.name,
+                    "email": r.email,
+                    "phone": r.phone,
+                    "score": self.score.overall,
+                    "reasons": scoring.get("reasons") or [],
+                },
+                "candidate": r,
+            })()
+        return None
+
+    results = []
+    for r in candidate_resumes:
+        ps = _get_persisted_score(r.email, r)
+        if ps:
+            results.append(ps)
+        else:
+            # Fallback: score and persist for future loads
+            scored_list = score_candidates_for_drive(
+                [r], current_job, company_id or "", effective_job_id or ""
+            )
+            for sr in scored_list:
+                try:
+                    database.set_candidate_scoring(
+                        sr.candidate.email,
+                        {
+                            "score": sr.score.overall,
+                            "breakdown": sr.score.breakdown,
+                            "weights": getattr(sr.score, "weights", {}) or {},
+                            "reasons": sr.to_row().get("reasons", []),
+                            "explanation": getattr(sr.score, "explanation", ""),
+                        },
+                        company_id,
+                        effective_job_id,
+                    )
+                except Exception:
+                    pass
+                results.append(sr)
+
     rows = []
 
     for result in results:
@@ -1584,7 +1639,8 @@ def _workspace_payload(
         }.values())
         row["education"] = result.candidate.education
         row["extractedSkills"] = result.candidate.skills
-        row["resumeText"] = result.candidate.raw_text
+        # Trim large text from list payload for performance
+        row.pop("resumeText", None)
         row["jobTitle"] = result.candidate.job_title
         row["location"] = result.candidate.location
         row["professionalSummary"] = result.candidate.summary
@@ -1594,11 +1650,11 @@ def _workspace_payload(
             or (result.candidate.raw_text or "").startswith("[NO_TEXT_EXTRACTED]")
             or _is_text_empty(result.candidate.raw_text)
         )
-        row["breakdown"] = result.score.breakdown
+        # Keep breakdown small if present; don't force large blobs
+        if hasattr(result, "score") and getattr(result.score, "breakdown", None) is not None:
+            row["breakdown"] = result.score.breakdown
         row["uploadedAt"] = result.candidate.uploaded_at.isoformat()
-        doc = database.get_candidate_doc(
-            result.candidate.email, company_id, effective_job_id
-        ) or {}
+        doc = docs_by_email.get(result.candidate.email) or {}
         row["pipelineStage"] = doc.get("pipelineStage", "uploaded")
         hr_inv = doc.get("hr_invitation") or {}
         tech_inv = doc.get("invitation") or {}
@@ -1639,7 +1695,7 @@ def _workspace_payload(
                 "title": d.get("title", ""),
                 "department": d.get("department", ""),
                 "status": d.get("status", "active"),
-                "candidate_count": len(database.load_candidates(company_id, job_id=jid)),
+                "candidate_count": database.count_candidates(company_id, job_id=jid),
                 "has_pending_request": is_pending,
                 "pending_request_type": pending_req.get("target_status") if is_pending else None,
             })

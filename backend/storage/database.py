@@ -1392,6 +1392,25 @@ def set_candidate_hr_interview(
     )
 
 
+def set_candidate_scoring(
+    email: str,
+    scoring: dict,
+    company_id: str | None = None,
+    job_id: str | None = None,
+) -> None:
+    _candidates.update_one(
+        _candidate_filter(email, company_id, job_id),
+        {
+            "$set": {
+                "scoring": scoring,
+                "scoring.score": scoring.get("score"),
+                "scoring.breakdown": scoring.get("breakdown"),
+                "scoring.scored_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    )
+
+
 def set_candidate_interview_recording(
     email: str,
     interview_type: str,
@@ -1399,10 +1418,10 @@ def set_candidate_interview_recording(
     company_id: str | None = None,
     job_id: str | None = None,
 ) -> None:
-    field = f"{interview_type}_interview"
+    interview_field = "technical_interview" if interview_type == "technical" else "hr_interview"
     _candidates.update_one(
         _candidate_filter(email, company_id, job_id),
-        {"$set": {f"{field}.recording": recording_meta}},
+        {"$set": {f"{interview_field}.recording": recording_meta}},
     )
 
 
@@ -1471,10 +1490,36 @@ def append_transcript_turn(
     }
     if extra:
         turn.update(extra)
-    _candidates.update_one(
+        _candidates.update_one(
         _candidate_filter(email, company_id, job_id),
         {"$push": {"interview_transcript": turn}},
     )
+
+
+def get_candidate_docs_by_email_batch(emails: list[str], company_id: str | None = None) -> dict[str, dict]:
+    """Batch-fetch candidate documents keyed by email (any job)."""
+    if not emails:
+        return {}
+    filt: dict = {"email": {"$in": list(dict.fromkeys(emails))}}
+    if company_id:
+        filt["company_id"] = str(company_id)
+    result: dict[str, dict] = {}
+    for doc in _candidates.find(filt):
+        result[doc.get("email")] = doc
+    return result
+
+
+def count_candidates(company_id: str | None = None, job_id: str | None = None) -> int:
+    """Count candidates efficiently."""
+    query: dict[str, Any] = {}
+    if company_id:
+        query["company_id"] = str(company_id)
+    if job_id:
+        query["job_id"] = job_id
+    try:
+        return _candidates.count_documents(query)
+    except Exception:
+        return len(list(_candidates.find(query, {"_id": 1})))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
