@@ -1496,17 +1496,27 @@ def append_transcript_turn(
     )
 
 
-def get_candidate_docs_by_email_batch(emails: list[str], company_id: str | None = None) -> dict[str, dict]:
-    """Batch-fetch candidate documents keyed by email (any job)."""
+def get_candidate_docs_batch(
+    emails: list[str],
+    company_id: str | None = None,
+    job_id: str | None = None,
+) -> dict[str, dict]:
+    """Batch-fetch candidate documents keyed by email."""
     if not emails:
         return {}
     filt: dict = {"email": {"$in": list(dict.fromkeys(emails))}}
     if company_id:
         filt["company_id"] = str(company_id)
+    if job_id:
+        filt["job_id"] = job_id
     result: dict[str, dict] = {}
     for doc in _candidates.find(filt):
         result[doc.get("email")] = doc
     return result
+
+
+# Backward compatibility alias
+get_candidate_docs_by_email_batch = get_candidate_docs_batch
 
 
 def count_candidates(company_id: str | None = None, job_id: str | None = None) -> int:
