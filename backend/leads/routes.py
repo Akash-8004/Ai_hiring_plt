@@ -5,8 +5,9 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from backend.auth.models import _validate_phone
 from backend.auth.security import check_lead_rate_limit, log_activity, require_super_admin
 from backend.core.sanitizer import sanitize_dict_fields, strip_html
 from backend.services import email_service
@@ -68,6 +69,11 @@ class LeadCreateRequest(BaseModel):
     message: str = Field(default="", max_length=5000)
     captcha_token: str = Field(default="", max_length=128)
     captcha_answer: str = Field(default="", max_length=10)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_lead_phone(cls, v: str) -> str:
+        return _validate_phone(v) or ""
 
 
 class LeadUpdateRequest(BaseModel):

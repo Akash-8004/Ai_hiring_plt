@@ -15,32 +15,341 @@ from backend.services.ocr import OCR_MIME_BY_EXT, ocr_document
 logger = logging.getLogger(__name__)
 
 
-KNOWN_SKILLS = {
-    "python",
-    "fastapi",
-    "django",
-    "flask",
-    "react",
-    "typescript",
-    "javascript",
-    "postgresql",
-    "mysql",
-    "mongodb",
-    "docker",
-    "kubernetes",
-    "aws",
-    "redis",
-    "celery",
-    "rest api",
-    "graphql",
-    "langchain",
-    "openai",
-    "html",
-    "css",
-    "node.js",
-    "git",
-    "linux",
+SKILL_ALIASES: dict[str, str] = {
+    # Node / JS / TS
+    "nodejs": "Node.js",
+    "node.js": "Node.js",
+    "node js": "Node.js",
+    "node": "Node.js",
+    "javascript": "JavaScript",
+    "js": "JavaScript",
+    "typescript": "TypeScript",
+    "ts": "TypeScript",
+    # Python & Frameworks
+    "python": "Python",
+    "py": "Python",
+    "fastapi": "FastAPI",
+    "fast api": "FastAPI",
+    "django": "Django",
+    "flask": "Flask",
+    # Frontend
+    "react": "React",
+    "reactjs": "React",
+    "react.js": "React",
+    "react js": "React",
+    "react native": "React Native",
+    "nextjs": "Next.js",
+    "next.js": "Next.js",
+    "next js": "Next.js",
+    "vue": "Vue.js",
+    "vuejs": "Vue.js",
+    "vue.js": "Vue.js",
+    "angular": "Angular",
+    "angularjs": "Angular",
+    "svelte": "Svelte",
+    "redux": "Redux",
+    "html": "HTML",
+    "html5": "HTML",
+    "css": "CSS",
+    "css3": "CSS",
+    "tailwind": "Tailwind CSS",
+    "tailwindcss": "Tailwind CSS",
+    "tailwind css": "Tailwind CSS",
+    "bootstrap": "Bootstrap",
+    # Databases
+    "postgres": "PostgreSQL",
+    "postgresql": "PostgreSQL",
+    "psql": "PostgreSQL",
+    "mysql": "MySQL",
+    "mongodb": "MongoDB",
+    "mongo": "MongoDB",
+    "redis": "Redis",
+    "sqlite": "SQLite",
+    "cassandra": "Cassandra",
+    "dynamodb": "DynamoDB",
+    "elasticsearch": "Elasticsearch",
+    "elastic search": "Elasticsearch",
+    "supabase": "Supabase",
+    "firebase": "Firebase",
+    "snowflake": "Snowflake",
+    "bigquery": "BigQuery",
+    # DevOps, Cloud & Infra
+    "docker": "Docker",
+    "kubernetes": "Kubernetes",
+    "k8s": "Kubernetes",
+    "terraform": "Terraform",
+    "ansible": "Ansible",
+    "aws": "AWS",
+    "amazon web services": "AWS",
+    "azure": "Azure",
+    "microsoft azure": "Azure",
+    "gcp": "GCP",
+    "google cloud": "GCP",
+    "google cloud platform": "GCP",
+    "ci/cd": "CI/CD",
+    "cicd": "CI/CD",
+    "ci cd": "CI/CD",
+    "jenkins": "Jenkins",
+    "github actions": "GitHub Actions",
+    "gitlab ci": "GitLab CI",
+    "git": "Git",
+    "github": "GitHub",
+    "gitlab": "GitLab",
+    "linux": "Linux",
+    "bash": "Bash",
+    "shell": "Shell",
+    "powershell": "PowerShell",
+    "nginx": "Nginx",
+    "apache": "Apache",
+    "helm": "Helm",
+    # Streaming / Messaging
+    "kafka": "Kafka",
+    "apache kafka": "Kafka",
+    "rabbitmq": "RabbitMQ",
+    "celery": "Celery",
+    "sqs": "AWS SQS",
+    # APIs & Architectures
+    "rest": "REST API",
+    "rest api": "REST API",
+    "rest apis": "REST API",
+    "restful": "REST API",
+    "restful api": "REST API",
+    "restful apis": "REST API",
+    "graphql": "GraphQL",
+    "grpc": "gRPC",
+    "microservices": "Microservices",
+    "websockets": "WebSockets",
+    # AI / ML / Data
+    "pytorch": "PyTorch",
+    "py torch": "PyTorch",
+    "tensorflow": "TensorFlow",
+    "keras": "Keras",
+    "scikit-learn": "Scikit-Learn",
+    "scikit learn": "Scikit-Learn",
+    "sklearn": "Scikit-Learn",
+    "pandas": "Pandas",
+    "numpy": "NumPy",
+    "langchain": "LangChain",
+    "llamaindex": "LlamaIndex",
+    "openai": "OpenAI",
+    "gemini": "Gemini",
+    "huggingface": "Hugging Face",
+    "hugging face": "Hugging Face",
+    "nlp": "NLP",
+    "deep learning": "Deep Learning",
+    "machine learning": "Machine Learning",
+    "data science": "Data Science",
+    "spark": "Apache Spark",
+    "apache spark": "Apache Spark",
+    "airflow": "Apache Airflow",
+    "apache airflow": "Apache Airflow",
+    # Other Languages & Frameworks
+    "java": "Java",
+    "c++": "C++",
+    "cpp": "C++",
+    "c#": "C#",
+    "csharp": "C#",
+    "golang": "Go",
+    "go": "Go",
+    "rust": "Rust",
+    "ruby": "Ruby",
+    "ruby on rails": "Ruby on Rails",
+    "rails": "Ruby on Rails",
+    "php": "PHP",
+    "laravel": "Laravel",
+    "spring": "Spring",
+    "spring boot": "Spring Boot",
+    "springboot": "Spring Boot",
+    ".net": ".NET",
+    "dotnet": ".NET",
+    "asp.net": "ASP.NET",
+    "express": "Express.js",
+    "expressjs": "Express.js",
+    "express.js": "Express.js",
+    "nestjs": "NestJS",
+    "kotlin": "Kotlin",
+    "swift": "Swift",
+    "scala": "Scala",
+    "r": "R",
+    "dart": "Dart",
+    "flutter": "Flutter",
+    "sql": "SQL",
+    "nosql": "NoSQL",
+    # Testing & Tooling
+    "jest": "Jest",
+    "pytest": "PyTest",
+    "postman": "Postman",
+    "jira": "Jira",
+    "selenium": "Selenium",
+    "cypress": "Cypress",
+    "playwright": "Playwright",
 }
+
+KNOWN_SKILLS = set(SKILL_ALIASES.keys()).union({v.lower() for v in SKILL_ALIASES.values()})
+
+
+def normalize_skill(skill: str) -> str:
+    """Normalize skill name to lowercase canonical representation for deterministic matching."""
+    cleaned = (skill or "").strip().lower()
+    if not cleaned:
+        return ""
+    if cleaned in SKILL_ALIASES:
+        return SKILL_ALIASES[cleaned].lower()
+    squashed = re.sub(r"[\s._-]+", "", cleaned)
+    for alias_key, canonical in SKILL_ALIASES.items():
+        if re.sub(r"[\s._-]+", "", alias_key) == squashed:
+            return canonical.lower()
+    return cleaned
+
+
+def canonicalize_skill(skill: str) -> str:
+    """Return standard display casing for a skill name."""
+    cleaned = (skill or "").strip()
+    if not cleaned:
+        return ""
+    lower = cleaned.lower()
+    if lower in SKILL_ALIASES:
+        return SKILL_ALIASES[lower]
+    squashed = re.sub(r"[\s._-]+", "", lower)
+    for alias_key, canonical in SKILL_ALIASES.items():
+        if re.sub(r"[\s._-]+", "", alias_key) == squashed:
+            return canonical
+    return cleaned.title() if cleaned.isupper() or cleaned.islower() else cleaned
+
+
+_SECTION_HEADER_RE = re.compile(
+    r"^\s*(?:technical\s+skills?|key\s+skills?|core\s+skills?|core\s+competencies|"
+    r"technologies(?:\s+(?:and|&)\s+tools)?|tools(?:\s+(?:and|&)\s+technologies)?|"
+    r"skills(?:\s+(?:and|&)\s+(?:expertise|abilities|competencies|tools))?|"
+    r"tech\s+stack|skills)\s*[:\-–—]?\s*(.*)$",
+    re.IGNORECASE,
+)
+
+_SECTION_STOP_RE = re.compile(
+    r"^\s*(?:experience|work\s+experience|professional\s+experience|employment|"
+    r"work\s+history|education|academic|projects|personal\s+projects|certifications?|"
+    r"licenses?|publications?|awards?|summary|profile|about\s+me|objective|"
+    r"interests|languages|references)\s*[:\-–—]?\s*$",
+    re.IGNORECASE,
+)
+
+_SUB_CATEGORY_PREFIX_RE = re.compile(
+    r"^\s*(?:languages?|programming\s+languages?|frameworks?|libraries|databases?|"
+    r"devops|cloud|tools?|platforms?|operating\s+systems?|methodologies?)\s*[:\-–—]\s*",
+    re.IGNORECASE,
+)
+
+_SKILL_DELIMITERS_RE = re.compile(r"[,;|•·\t]|\s+[/–—]\s+")
+
+_NOISE_TOKENS = {
+    "and", "etc", "or", "years", "year", "yrs", "experience", "various", "including",
+    "basic", "advanced", "intermediate", "proficient", "strong", "good", "hands-on",
+    "knowledge", "skills", "tools", "competencies", "technologies",
+}
+
+
+def _clean_skill_token(raw_token: str) -> list[str]:
+    """Clean a skill token, handling parentheses (e.g. 'AWS (EC2, S3)') and noise prefixes."""
+    token = raw_token.strip(" \t\r\n.,;:|•·-*_")
+    if not token or len(token) > 45:
+        return []
+    token = re.sub(
+        r"^(?:proficient\s+in|hands-on\s+with|experience\s+with|knowledge\s+of|strong\s+in|familiar\s+with)\s+",
+        "",
+        token,
+        flags=re.IGNORECASE,
+    ).strip()
+    if not token:
+        return []
+    paren_match = re.match(r"^([^(]+)\(([^)]+)\)$", token)
+    if paren_match:
+        main_part = paren_match.group(1).strip()
+        sub_part = paren_match.group(2).strip()
+        results = []
+        if main_part and main_part.lower() not in _NOISE_TOKENS:
+            results.append(canonicalize_skill(main_part))
+        for sub in _SKILL_DELIMITERS_RE.split(sub_part):
+            sub_clean = sub.strip()
+            if sub_clean and sub_clean.lower() not in _NOISE_TOKENS and not sub_clean.isdigit():
+                results.append(canonicalize_skill(sub_clean))
+        return results
+
+    if token.lower() in _NOISE_TOKENS or token.isdigit():
+        return []
+    return [canonicalize_skill(token)]
+
+
+def extract_skills_from_text(text: str) -> list[str]:
+    """Extract skills using section-aware parsing combined with comprehensive lexicon matching."""
+    if not text or not text.strip():
+        return []
+
+    extracted: list[str] = []
+    seen_normalized: set[str] = set()
+
+    def add_skill(skill_name: str) -> None:
+        norm = normalize_skill(skill_name)
+        if norm and norm not in seen_normalized and norm not in _NOISE_TOKENS:
+            seen_normalized.add(norm)
+            extracted.append(skill_name)
+
+    lines = text.splitlines()
+    in_skills_section = False
+    section_lines_read = 0
+
+    # 1. Section-aware extraction
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if in_skills_section and section_lines_read > 0:
+                in_skills_section = False
+            continue
+
+        header_match = _SECTION_HEADER_RE.match(stripped)
+        if header_match:
+            in_skills_section = True
+            section_lines_read = 0
+            inline_content = header_match.group(1).strip()
+            if inline_content:
+                for chunk in _SKILL_DELIMITERS_RE.split(inline_content):
+                    for tok in _clean_skill_token(chunk):
+                        add_skill(tok)
+            continue
+
+        if in_skills_section:
+            if _SECTION_STOP_RE.match(stripped):
+                in_skills_section = False
+                continue
+
+            section_lines_read += 1
+            if section_lines_read > 25:
+                in_skills_section = False
+                continue
+
+            content = _SUB_CATEGORY_PREFIX_RE.sub("", stripped)
+            content = re.sub(r"^[-*•·>]\s*", "", content)
+            for chunk in _SKILL_DELIMITERS_RE.split(content):
+                for tok in _clean_skill_token(chunk):
+                    add_skill(tok)
+
+    # 2. Comprehensive lexicon scan across the entire text (with boundary protection)
+    lower_text = text.lower()
+    for alias, canonical in SKILL_ALIASES.items():
+        norm = canonical.lower()
+        if norm in seen_normalized:
+            continue
+        if len(alias) <= 2:
+            if alias in {"c++", "c#", ".net"}:
+                pattern = r"(?<![a-zA-Z0-9])" + re.escape(alias) + r"(?![a-zA-Z0-9])"
+                if re.search(pattern, lower_text):
+                    add_skill(canonical)
+            continue
+
+        pattern = r"(?<![a-zA-Z0-9])" + re.escape(alias) + r"(?![a-zA-Z0-9])"
+        if re.search(pattern, lower_text):
+            add_skill(canonical)
+
+    return extracted
 
 
 # Minimum number of non-whitespace characters to consider extracted text
@@ -89,7 +398,7 @@ def parse_resume_text(file_name: str, text: str) -> ParsedResume:
     phone = _first_match(r"(\+?\d[\d\s().-]{8,}\d)", normalized, "Not found")
     experience = _extract_experience(lower_text)
     education = _extract_education(text)
-    skills = sorted({skill.title() if skill != "rest api" else "REST API" for skill in KNOWN_SKILLS if skill in lower_text})
+    skills = extract_skills_from_text(text)
     linkedin = _first_match(r"(linkedin\.com/[^\s,]+)", normalized, "")
     github = _first_match(r"(github\.com/[^\s,]+)", normalized, "")
     other_links = _extract_other_links(normalized, linkedin)
@@ -106,6 +415,7 @@ def parse_resume_text(file_name: str, text: str) -> ParsedResume:
         github=github,
         raw_text=text,
         other_links=other_links,
+        parsing_provider="regex-fallback",
     )
 
 
@@ -115,18 +425,50 @@ def parse_resume_text_with_ai(file_name: str, text: str) -> ParsedResume:
     load_env()
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        return parse_resume_text(file_name, text)
+        logger.warning(
+            "parse_resume_text_with_ai: GEMINI_API_KEY is not configured; using regex-fallback for %s",
+            file_name,
+        )
+        res = parse_resume_text(file_name, text)
+        res.parsing_provider = "regex-fallback"
+        return res
     try:
+        model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
         parsed = _extract_with_gemini(file_name, text, api_key)
         model_links = parsed.get("other_links") if isinstance(parsed.get("other_links"), list) else []
         model_links += ([{"label": "GitHub", "url": _string(parsed.get("github"))}] if _string(parsed.get("github")) else [])
         model_links += _extract_other_links(text, _string(parsed.get("linkedin")))
+
+        extracted_skills = _string_list(parsed.get("skills"))
+        local_skills = extract_skills_from_text(text)
+        if not extracted_skills:
+            logger.warning(
+                "parse_resume_text_with_ai: Gemini returned empty skills for %s; using local fallback skills (%d found)",
+                file_name,
+                len(local_skills),
+            )
+            extracted_skills = local_skills
+        else:
+            # Union with local skills so no explicitly mentioned skills are missed
+            seen = {normalize_skill(s) for s in extracted_skills}
+            for ls in local_skills:
+                if normalize_skill(ls) not in seen:
+                    extracted_skills.append(ls)
+                    seen.add(normalize_skill(ls))
+
+        logger.info(
+            "parse_resume_text_with_ai: file=%s, model=%s, key_present=True, skills_count=%d, provider=gemini",
+            file_name,
+            model,
+            len(extracted_skills),
+        )
+
         return ParsedResume(
             file_name=file_name,
             full_name=_string(parsed.get("full_name"), "Not found"),
             email=_string(parsed.get("email"), "not-found@example.com"),
             phone=_string(parsed.get("phone"), "Not found"),
-            skills=_string_list(parsed.get("skills")),
+            skills=extracted_skills,
             experience_years=_nonnegative_int(parsed.get("experience_years")),
             education=_string(parsed.get("education"), "Not found"),
             linkedin=_string(parsed.get("linkedin")),
@@ -138,8 +480,23 @@ def parse_resume_text_with_ai(file_name: str, text: str) -> ParsedResume:
             parsing_provider="gemini",
             other_links=_link_list(model_links),
         )
-    except Exception:
-        return parse_resume_text(file_name, text)
+    except Exception as exc:
+        model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+        logger.exception(
+            "parse_resume_text_with_ai: Gemini extraction failed for %s (model=%s): %s; falling back to regex parser",
+            file_name,
+            model,
+            exc,
+        )
+        res = parse_resume_text(file_name, text)
+        res.parsing_provider = "gemini-failed"
+        logger.info(
+            "parse_resume_text_with_ai: file=%s, model=%s, key_present=True, skills_count=%d, provider=gemini-failed",
+            file_name,
+            model,
+            len(res.skills),
+        )
+        return res
 
 
 def parse_uploaded_resume_with_ai(uploaded_file: BinaryIO, raw_bytes: bytes | None = None) -> ParsedResume:
@@ -169,7 +526,7 @@ def parse_uploaded_resume_with_ai(uploaded_file: BinaryIO, raw_bytes: bytes | No
     if _is_text_empty(text):
         return _empty_resume(file_name, text)
     resume = parse_resume_text_with_ai(file_name, text)
-    if ocr_used and resume.parsing_provider not in {"none", "regex-fallback"}:
+    if ocr_used and resume.parsing_provider not in {"none", "regex-fallback", "gemini-failed"} and not resume.parsing_provider.endswith("-ocr"):
         resume.parsing_provider = f"{resume.parsing_provider}-ocr"
     return resume
 

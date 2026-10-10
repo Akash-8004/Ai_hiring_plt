@@ -1221,7 +1221,11 @@ def _candidate_query(company_id: str | None = None, job_id: str | None = None) -
     return query
 
 
-def load_candidates(company_id: str | None = None, job_id: str | None = None) -> list[ParsedResume]:
+def load_candidates(
+    company_id: str | None = None,
+    job_id: str | None = None,
+    projection: dict | None = None,
+) -> list[ParsedResume]:
     resumes = []
     valid_fields = {
         "file_name", "full_name", "email", "phone", "skills",
@@ -1230,7 +1234,16 @@ def load_candidates(company_id: str | None = None, job_id: str | None = None) ->
         "other_links",
     }
     query = _candidate_query(company_id, job_id)
-    for doc in _candidates.find(query):
+    if projection is None:
+        # Exclude large nested transcripts/recordings by default for fast lightweight transfer
+        projection = {
+            "interview_transcript": 0,
+            "hr_interview.transcript": 0,
+            "technical_interview.transcript": 0,
+            "technical_interview.recording": 0,
+            "hr_interview.recording": 0,
+        }
+    for doc in _candidates.find(query, projection):
         doc["uploaded_at"] = doc.get("uploaded_at") or datetime.now(timezone.utc)
         clean_doc = {k: v for k, v in doc.items() if k in valid_fields}
         clean_doc.setdefault("phone", "Not found")
@@ -1398,14 +1411,23 @@ def set_candidate_scoring(
     company_id: str | None = None,
     job_id: str | None = None,
 ) -> None:
+    score_val = scoring.get("score")
     _candidates.update_one(
         _candidate_filter(email, company_id, job_id),
         {
             "$set": {
                 "scoring": scoring,
-                "scoring.score": scoring.get("score"),
+                "scoring.score": score_val,
                 "scoring.breakdown": scoring.get("breakdown"),
                 "scoring.scored_at": datetime.now(timezone.utc).isoformat(),
+                "cached_score": {
+                    "total_score": score_val if score_val is not None else 0,
+                    "recommendation": "Shortlist" if (score_val or 0) >= 80 else "Review / Reject",
+                    "matched_skills": scoring.get("matched_skills", []),
+                    "missing_skills": scoring.get("missing_skills", []),
+                    "breakdown": scoring.get("breakdown", {}),
+                    "summary": scoring.get("explanation", ""),
+                },
             }
         },
     )
@@ -1431,15 +1453,27 @@ def set_candidate_score(
     company_id: str | None = None,
     job_id: str | None = None,
 ) -> None:
+    score_val = score_dict.get("total_score")
     _candidates.update_one(
         _candidate_filter(email, company_id, job_id),
-        {"$set": {"cached_score": score_dict}},
+        {
+            "$set": {
+                "cached_score": score_dict,
+                "scoring": {
+                    "score": score_val if score_val is not None else 0,
+                    "breakdown": score_dict.get("breakdown", {}),
+                    "reasons": [],
+                    "explanation": score_dict.get("summary", ""),
+                    "scored_at": datetime.now(timezone.utc).isoformat(),
+                },
+            }
+        },
     )
 
 
 def clear_candidate_scores(company_id: str | None = None, job_id: str | None = None) -> int:
     query = _candidate_query(company_id, job_id)
-    result = _candidates.update_many(query, {"$unset": {"cached_score": ""}})
+    result = _candidates.update_many(query, {"$unset": {"cached_score": "", "scoring": ""}})
     return result.modified_count
 
 
@@ -1490,7 +1524,7 @@ def append_transcript_turn(
     }
     if extra:
         turn.update(extra)
-        _candidates.update_one(
+    _candidates.update_one(
         _candidate_filter(email, company_id, job_id),
         {"$push": {"interview_transcript": turn}},
     )
@@ -1530,6 +1564,23 @@ def count_candidates(company_id: str | None = None, job_id: str | None = None) -
         return _candidates.count_documents(query)
     except Exception:
         return len(list(_candidates.find(query, {"_id": 1})))
+
+
+def count_candidates_by_job(company_id: str | None = None) -> dict[str, int]:
+    """Return a mapping of job_id -> candidate count using a single aggregation."""
+    if not company_id:
+        return {}
+    pipeline = [
+        {"$match": {"company_id": str(company_id), "job_id": {"$exists": True, "$ne": None}}},
+        {"$group": {"_id": "$job_id", "count": {"$sum": 1}}},
+    ]
+    results: dict[str, int] = {}
+    try:
+        for doc in _candidates.aggregate(pipeline):
+            results[str(doc["_id"])] = doc["count"]
+    except Exception:
+        pass
+    return results
 
 
 # ═══════════════════════════════════════════════════════════════════════════

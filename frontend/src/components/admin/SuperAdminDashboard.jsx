@@ -338,6 +338,10 @@ export function SuperAdminDashboard() {
 
   const handleAdjustCredits = async (companyId, delta) => {
     if (!delta) return;
+    if (Math.abs(delta) > 50000) {
+      alert("Credit adjustment cannot exceed ±50,000 credits.");
+      return;
+    }
     setCreditAdjustLoading(true);
     try {
       const res = await apiFetchJson(`/api/admin/companies/${companyId}/credits`, {
@@ -983,11 +987,13 @@ export function SuperAdminDashboard() {
                                     <div className="flex-row gap-2 mt-3 align-center">
                                       <input
                                         type="number"
+                                        min="1"
+                                        max="50000"
                                         className="input-field input-sm"
-                                        placeholder="Minutes"
+                                        placeholder="Credits (1 - 50k)"
                                         value={creditAdjustAmount}
                                         onChange={(e) => setCreditAdjustAmount(e.target.value)}
-                                        style={{ width: 120 }}
+                                        style={{ width: 140 }}
                                       />
                                       <button
                                         className="btn btn-primary btn-xs"
@@ -1020,6 +1026,9 @@ export function SuperAdminDashboard() {
                                         )}
                                       </button>
                                     </div>
+                                    <p className="text-xs text-muted mt-1">
+                                      Cap: max ±50,000 credits per adjustment (total allowance capped at 2× plan limit).
+                                    </p>
                                     <table className="sub-users-table mt-4">
                                       <thead>
                                         <tr>

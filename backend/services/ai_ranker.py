@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import urllib.error
@@ -7,6 +8,31 @@ import urllib.request
 from backend.config import load_env
 from backend.core.models import JobDescription, ParsedResume, ResumeScore
 from backend.core.sanitizer import sanitize_for_prompt as _sanitize
+from backend.services.resume_parser import (
+    canonicalize_skill as _display_skill,
+    extract_skills_from_text,
+    normalize_skill as _normalize_skill,
+)
+
+logger = logging.getLogger(__name__)
+
+_shared_ranking_service: "AIRankingService | None" = None
+_local_ranking_service: "AIRankingService | None" = None
+
+
+def get_ranking_service() -> "AIRankingService":
+    global _shared_ranking_service
+    if _shared_ranking_service is None:
+        _shared_ranking_service = AIRankingService()
+    return _shared_ranking_service
+
+
+def get_local_ranking_service() -> "AIRankingService":
+    global _local_ranking_service
+    if _local_ranking_service is None:
+        _local_ranking_service = AIRankingService()
+        _local_ranking_service.provider = "local"
+    return _local_ranking_service
 
 
 class AIRankingService:
@@ -61,20 +87,50 @@ class AIRankingService:
                 ),
             )
 
+        # Phase C: Safety net — if candidate skills are empty but raw_text is non-trivial, derive them
+        if not resume.skills and resume.raw_text and len(resume.raw_text.strip()) >= 30:
+            derived = extract_skills_from_text(resume.raw_text)
+            if derived:
+                logger.info(
+                    "rank_resume: Derived %d skills from raw_text for candidate %s (%s)",
+                    len(derived),
+                    resume.full_name,
+                    resume.email,
+                )
+                resume.skills = derived
+
         if self.provider == "gemini" and self.api_key:
             try:
                 self.last_provider_used = "gemini"
                 self.last_error = ""
-                return self._rank_with_gemini(resume, job)
+                score = self._rank_with_gemini(resume, job)
+                logger.info(
+                    "rank_resume: branch=gemini, skills_count=%d, score=%d",
+                    len(resume.skills),
+                    score.total_score,
+                )
+                return score
             except Exception as exc:
                 score = self._rank_locally(resume, job)
                 self.last_provider_used = "local-fallback"
                 self.last_error = _friendly_error(exc)
+                logger.warning(
+                    "rank_resume: branch=local-fallback, skills_count=%d, score=%d, error=%s",
+                    len(resume.skills),
+                    score.total_score,
+                    self.last_error,
+                )
                 return score
 
         self.last_provider_used = "local"
         self.last_error = "" if self.provider == "local" else "Gemini API key is not configured."
-        return self._rank_locally(resume, job)
+        score = self._rank_locally(resume, job)
+        logger.info(
+            "rank_resume: branch=local, skills_count=%d, score=%d",
+            len(resume.skills),
+            score.total_score,
+        )
+        return score
 
     def _rank_locally(self, resume: ParsedResume, job: JobDescription) -> ResumeScore:
         required = {_normalize_skill(skill) for skill in job.required_skills if skill.strip()}
@@ -82,6 +138,8 @@ class AIRankingService:
 
         matched = sorted(required.intersection(resume_skills))
         missing = sorted(required.difference(resume_skills))
+
+        skills_not_detected = not resume_skills and bool(resume.raw_text and len(resume.raw_text.strip()) >= 30)
 
         skill_score = round((len(matched) / max(len(required), 1)) * 100)
         keyword_score = self._keyword_overlap(resume.raw_text, job.description)
@@ -97,8 +155,15 @@ class AIRankingService:
             + (semantic_score * 0.2)
         )
 
-        recommendation = "Shortlist" if total >= job.threshold else "Review / Reject"
-        summary = self._summary(resume, job, total, matched, missing)
+        if skills_not_detected:
+            recommendation = "Review / Reject"
+            summary = (
+                f"{resume.full_name}: Needs review — skills not detected automatically. "
+                f"Manual verification recommended before decision."
+            )
+        else:
+            recommendation = "Shortlist" if total >= job.threshold else "Review / Reject"
+            summary = self._summary(resume, job, total, matched, missing)
 
         return ResumeScore(
             total_score=total,
@@ -317,10 +382,3 @@ def _important_terms(text: str) -> set[str]:
         if token not in stop_words
     }
 
-
-def _normalize_skill(skill: str) -> str:
-    return skill.strip().lower().replace("rest APIs".lower(), "rest api")
-
-
-def _display_skill(skill: str) -> str:
-    return "REST API" if skill == "rest api" else skill.title()

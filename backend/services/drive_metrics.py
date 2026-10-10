@@ -1,8 +1,9 @@
+from typing import Any
 from backend.core.models import JobDescription, ParsedResume
-from backend.services.ai_ranker import AIRankingService
+from backend.services.ai_ranker import AIRankingService, get_ranking_service
 from backend.storage import database
 
-_ranking_service = AIRankingService()
+_ranking_service = get_ranking_service()
 
 
 def _as_dict(value) -> dict:
@@ -90,21 +91,46 @@ def compute_drive_metrics(
     company_id: str,
     job_id: str,
     current_job: JobDescription,
+    candidate_results: list[Any] | None = None,
+    candidate_docs: list[dict] | None = None,
 ) -> dict:
-    results = score_candidates_for_drive(candidate_resumes, current_job, company_id, job_id)
+    if candidate_results is None:
+        candidate_results = score_candidates_for_drive(candidate_resumes, current_job, company_id, job_id)
 
-    candidate_docs = [
-        database.get_candidate_doc(result.candidate.email, company_id, job_id) or {}
-        for result in results
-    ]
+    if candidate_docs is None:
+        emails = [
+            r.candidate.email if hasattr(r, "candidate") else getattr(r, "email", "")
+            for r in candidate_results
+        ]
+        emails = [e for e in emails if e]
+        docs_map = database.get_candidate_docs_batch(emails, company_id, job_id)
+        candidate_docs = list(docs_map.values())
 
     metrics = derive_funnel_metrics(candidate_docs)
+
+    total_candidates = len(candidate_resumes)
+    shortlisted_count = 0
+    rejected_count = 0
+    scores: list[int] = []
+
+    threshold = getattr(current_job, "threshold", 80)
+    for r in candidate_results:
+        score_obj = getattr(r, "score", None)
+        score_val = getattr(score_obj, "total_score", getattr(score_obj, "overall", None))
+        if score_val is not None:
+            scores.append(score_val)
+        status = getattr(r, "status", None)
+        if status == "Shortlisted" or (status is None and score_val is not None and score_val >= threshold):
+            shortlisted_count += 1
+        elif status == "Rejected" or (status is None and score_val is not None and score_val < threshold):
+            rejected_count += 1
+
     metrics.update({
-        "uploaded": len(candidate_resumes),
-        "shortlisted": len([r for r in results if r.status == "Shortlisted"]),
-        "rejected": len([r for r in results if r.status == "Rejected"]),
-        "averageScore": round(sum(r.score.total_score for r in results) / len(results)) if results else 0,
-        "candidate_count": len(candidate_resumes),
+        "uploaded": total_candidates,
+        "shortlisted": shortlisted_count,
+        "rejected": rejected_count,
+        "averageScore": round(sum(scores) / len(scores)) if scores else 0,
+        "candidate_count": total_candidates,
     })
     return metrics
 
@@ -114,6 +140,16 @@ def score_candidates_for_drive(
     current_job: JobDescription,
     company_id: str,
     job_id: str,
+    docs_by_email: dict[str, dict] | None = None,
+    ranking_service: AIRankingService | None = None,
 ):
     from backend.services.ranking import score_candidates
-    return score_candidates(candidate_resumes, current_job, _ranking_service, company_id, job_id)
+    svc = ranking_service or _ranking_service
+    return score_candidates(
+        candidate_resumes,
+        current_job,
+        svc,
+        company_id,
+        job_id,
+        docs_by_email=docs_by_email,
+    )

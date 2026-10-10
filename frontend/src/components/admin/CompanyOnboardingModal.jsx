@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from "react";
 import { X, Building2, User, Mail, Lock, Shield, CheckCircle, Copy, Phone, Loader2, Eye, EyeOff } from "lucide-react";
 import { apiFetchJson } from "../../utils/api";
 
+const PHONE_RE = /^\+?[0-9][0-9\s().-]{6,19}$/;
+
 export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, initialData, leadId, onLeadConverted }) {
   const [companyName, setCompanyName] = useState("");
   const [industry, setIndustry] = useState("Technology");
@@ -17,6 +19,7 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, init
   const [passwordError, setPasswordError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [contactEmailError, setContactEmailError] = useState("");
+  const [contactPhoneError, setContactPhoneError] = useState("");
   const [adminEmailError, setAdminEmailError] = useState("");
   const [successData, setSuccessData] = useState(null);
   const [copied, setCopied] = useState(false);
@@ -45,11 +48,17 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, init
     setError("");
     setPasswordError("");
     setContactEmailError("");
+    setContactPhoneError("");
     setAdminEmailError("");
 
     const emailPattern = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
     if (!emailPattern.test(contactEmail.trim())) {
       setContactEmailError("Invalid email address");
+      return;
+    }
+    const trimmedPhone = contactPhone.trim();
+    if (trimmedPhone && !PHONE_RE.test(trimmedPhone)) {
+      setContactPhoneError("Enter a valid phone number");
       return;
     }
     if (!emailPattern.test(adminEmail.trim())) {
@@ -295,11 +304,22 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, init
                   <label className="form-label">Contact Phone</label>
                   <input
                     type="tel"
-                    className="input-field"
+                    inputMode="tel"
+                    pattern="^\+?[0-9][0-9\s().-]{6,19}$"
+                    className={`input-field ${contactPhoneError ? "border-danger" : ""}`}
                     placeholder="+1 555-0199"
                     value={contactPhone}
-                    onChange={(e) => setContactPhone(e.target.value)}
+                    onChange={(e) => {
+                      setContactPhone(e.target.value);
+                      const val = e.target.value.trim();
+                      if (val && !PHONE_RE.test(val)) {
+                        setContactPhoneError("Enter a valid phone number");
+                      } else {
+                        setContactPhoneError("");
+                      }
+                    }}
                   />
+                  {contactPhoneError ? <span className="field-error">{contactPhoneError}</span> : null}
                 </div>
               </div>
 
@@ -410,7 +430,7 @@ export function CompanyOnboardingModal({ isOpen, onClose, onCompanyCreated, init
               <button type="button" className="btn btn-secondary" onClick={handleClose} disabled={loading}>
                 Cancel
               </button>
-              <button type="submit" className="btn btn-primary" disabled={loading}>
+              <button type="submit" className="btn btn-primary" disabled={loading || !!contactPhoneError}>
                 {loading ? "Creating..." : "Create Company & Account"}
               </button>
             </div>

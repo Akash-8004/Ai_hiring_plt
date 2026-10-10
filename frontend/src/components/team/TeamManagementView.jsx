@@ -99,6 +99,11 @@ export function TeamManagementView() {
       return;
     }
 
+    if (!permissions.length) {
+      setFormError("Select at least one permission.");
+      return;
+    }
+
     setFormLoading(true);
 
     try {
@@ -501,7 +506,7 @@ export function TeamManagementView() {
                   <button type="button" className="btn btn-secondary" onClick={handleCloseModal} disabled={formLoading}>
                     Cancel
                   </button>
-                  <button type="submit" className="btn btn-primary" disabled={formLoading}>
+                  <button type="submit" className="btn btn-primary" disabled={formLoading || permissions.length === 0}>
                     {formLoading ? "Creating..." : "Create Account"}
                   </button>
                 </div>

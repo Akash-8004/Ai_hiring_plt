@@ -25,7 +25,7 @@ from backend.core.sanitizer import strip_html as _strip_html
 from backend.core.sample_data import DEFAULT_JOB
 from backend.config import frontend_base_url
 from backend.live.relay import GeminiLiveRelay
-from backend.services.ai_ranker import AIRankingService
+from backend.services.ai_ranker import AIRankingService, get_ranking_service, get_local_ranking_service
 from backend.services.HR_Round.hr_evaluator import HREvaluator
 from backend.services.Technical.interviewer import get_interviewer_prompt
 from backend.services.Technical.question_processor import QuestionProcessor
@@ -110,7 +110,7 @@ app.include_router(company_router)
 app.include_router(leads_router)
 
 # ── Shared services (stateless, safe to share) ─────────────────────────────
-ranking_service = AIRankingService()
+ranking_service = get_ranking_service()
 hr_evaluator = HREvaluator()
 technical_evaluator = TechnicalInterviewEvaluator()
 question_processor = QuestionProcessor()
@@ -611,10 +611,12 @@ async def process_questions_file(
             status_code=400,
             detail="Could not process the file. Please check the file and try again.",
         ) from exc
+    fallback_used = getattr(question_processor, "last_provider_used", "") == "local"
+    if question_processor.last_error:
+        logger.info("Question file processing status: %s", question_processor.last_error)
     return {
         "questions": questions,
-        "provider_used": question_processor.last_provider_used,
-        "message": question_processor.last_error,
+        "fallback_used": fallback_used,
     }
 
 
@@ -634,10 +636,12 @@ def process_questions_text(
             status_code=400,
             detail="Could not process the questions. Please try again.",
         ) from exc
+    fallback_used = getattr(question_processor, "last_provider_used", "") == "local"
+    if question_processor.last_error:
+        logger.info("Question text processing status: %s", question_processor.last_error)
     return {
         "questions": questions,
-        "provider_used": question_processor.last_provider_used,
-        "message": question_processor.last_error,
+        "fallback_used": fallback_used,
     }
 
 
@@ -1556,73 +1560,114 @@ def _workspace_payload(
     stored_job = drive
     current_job = stored_job or DEFAULT_JOB
     job_doc = database.get_job_doc(company_id, effective_job_id) if company_id and effective_job_id else {}
-    _auto_fail_missed_deadlines(company_id, effective_job_id, job_doc or {})
-    hr_deadline = (job_doc or {}).get("hr_deadline")
-    technical_deadline = (job_doc or {}).get("technical_deadline")
-    hr_deadline_passed = _deadline_has_passed(hr_deadline)
-    technical_deadline_passed = _deadline_has_passed(technical_deadline)
     candidate_resumes = (
         database.load_candidates(company_id, job_id=effective_job_id)
         if company_id
         else database.load_candidates()
     )
     # Batch-fetch candidate docs to avoid N+1 lookups
-    candidate_emails = [r.email for r in candidate_resumes]
+    candidate_emails = [
+        r.email if hasattr(r, "email") else r.get("email", "")
+        for r in candidate_resumes
+        if (hasattr(r, "email") and r.email) or (isinstance(r, dict) and r.get("email"))
+    ]
     docs_by_email = database.get_candidate_docs_batch(
         candidate_emails, company_id, effective_job_id
     ) if candidate_emails else {}
+
+    _auto_fail_missed_deadlines(company_id, effective_job_id, job_doc or {}, docs_by_email=docs_by_email)
+    hr_deadline = (job_doc or {}).get("hr_deadline")
+    technical_deadline = (job_doc or {}).get("technical_deadline")
+    hr_deadline_passed = _deadline_has_passed(hr_deadline)
+    technical_deadline_passed = _deadline_has_passed(technical_deadline)
 
     # Prefer persisted scores; fallback to rescoring if missing
     def _get_persisted_score(email: str, resume):
         doc = docs_by_email.get(email) or {}
         scoring = doc.get("scoring") or {}
-        if scoring.get("score") is not None and scoring.get("breakdown") is not None:
+        cached = doc.get("cached_score") or {}
+        overall_score = scoring.get("score") if scoring.get("score") is not None else cached.get("total_score")
+        if overall_score is not None:
+            breakdown = scoring.get("breakdown") or cached.get("breakdown") or {}
+            explanation = scoring.get("explanation") or cached.get("summary") or ""
+            reasons = scoring.get("reasons") or []
+            threshold = getattr(current_job, "threshold", 80)
+            status = "Shortlisted" if overall_score >= threshold else "Rejected"
+            matched = cached.get("matched_skills") or []
+            missing = cached.get("missing_skills") or []
             return type("Persisted", (), {
                 "score": type("S", (), {
-                    "overall": scoring["score"],
-                    "breakdown": scoring["breakdown"],
+                    "overall": overall_score,
+                    "total_score": overall_score,
+                    "breakdown": breakdown,
                     "weights": scoring.get("weights") or {},
-                    "explanation": scoring.get("explanation") or "",
+                    "explanation": explanation,
+                    "summary": explanation,
+                    "matched_skills": matched,
+                    "missing_skills": missing,
                 })(),
+                "status": status,
                 "to_row": lambda self, r=resume: {
-                    "candidate_id": r.candidate_id,
-                    "name": r.name,
-                    "email": r.email,
-                    "phone": r.phone,
-                    "score": self.score.overall,
-                    "reasons": scoring.get("reasons") or [],
+                    "Name": getattr(r, "full_name", ""),
+                    "Email": getattr(r, "email", ""),
+                    "Phone": getattr(r, "phone", ""),
+                    "Experience": f"{getattr(r, 'experience_years', 0)} yrs",
+                    "Skills": ", ".join(getattr(r, "skills", [])[:8]),
+                    "Score": overall_score,
+                    "Status": status,
+                    "Matched": ", ".join(matched),
+                    "Missing": ", ".join(missing),
+                    "Summary": explanation,
+                    "reasons": reasons,
                 },
                 "candidate": r,
             })()
         return None
 
+    unscored_resumes = []
     results = []
     for r in candidate_resumes:
         ps = _get_persisted_score(r.email, r)
         if ps:
             results.append(ps)
         else:
-            # Fallback: score and persist for future loads
-            scored_list = score_candidates_for_drive(
-                [r], current_job, company_id or "", effective_job_id or ""
+            unscored_resumes.append(r)
+
+    if unscored_resumes:
+        # Guard against synchronous Gemini timeout storm if multiple unscored candidates
+        use_fast_scoring = len(unscored_resumes) > 5 and ranking_service.provider == "gemini"
+        svc = get_local_ranking_service() if use_fast_scoring else ranking_service
+        if use_fast_scoring:
+            logger.warning(
+                "_workspace_payload: %d unscored candidates; using fast local ranking for immediate response",
+                len(unscored_resumes),
             )
-            for sr in scored_list:
-                try:
-                    database.set_candidate_scoring(
-                        sr.candidate.email,
-                        {
-                            "score": sr.score.overall,
-                            "breakdown": sr.score.breakdown,
-                            "weights": getattr(sr.score, "weights", {}) or {},
-                            "reasons": sr.to_row().get("reasons", []),
-                            "explanation": getattr(sr.score, "explanation", ""),
-                        },
-                        company_id,
-                        effective_job_id,
-                    )
-                except Exception:
-                    pass
-                results.append(sr)
+        scored_list = score_candidates_for_drive(
+            unscored_resumes,
+            current_job,
+            company_id or "",
+            effective_job_id or "",
+            docs_by_email=docs_by_email,
+            ranking_service=svc,
+        )
+        for sr in scored_list:
+            try:
+                score_val = getattr(sr.score, "overall", getattr(sr.score, "total_score", 0))
+                database.set_candidate_scoring(
+                    sr.candidate.email,
+                    {
+                        "score": score_val,
+                        "breakdown": sr.score.breakdown,
+                        "weights": getattr(sr.score, "weights", {}) or {},
+                        "reasons": sr.to_row().get("reasons", []),
+                        "explanation": getattr(sr.score, "explanation", getattr(sr.score, "summary", "")),
+                    },
+                    company_id,
+                    effective_job_id,
+                )
+            except Exception:
+                logger.exception("Failed to persist score for candidate %s", sr.candidate.email)
+            results.append(sr)
 
     rows = []
 
@@ -1680,22 +1725,35 @@ def _workspace_payload(
         rows.append(row)
 
     metrics = compute_drive_metrics(
-        candidate_resumes, company_id or "", effective_job_id or "", current_job
+        candidate_resumes,
+        company_id or "",
+        effective_job_id or "",
+        current_job,
+        candidate_results=results,
+        candidate_docs=list(docs_by_email.values()),
     )
     metrics.pop("candidate_count", None)
 
     drives = []
     if company_id:
-        for d in database.list_jobs(company_id):
+        all_drives = database.list_jobs(company_id)
+        candidate_counts = database.count_candidates_by_job(company_id)
+        all_reqs = database.list_jd_requests(company_id)
+        pending_reqs = {
+            r.get("job_id"): r
+            for r in all_reqs
+            if r.get("job_id") and r.get("status") == "pending"
+        }
+        for d in all_drives:
             jid = d["job_id"]
-            pending_req = database.get_jd_request(company_id, jid)
-            is_pending = bool(pending_req and pending_req.get("status") == "pending")
+            pending_req = pending_reqs.get(jid)
+            is_pending = bool(pending_req)
             drives.append({
                 "job_id": jid,
                 "title": d.get("title", ""),
                 "department": d.get("department", ""),
                 "status": d.get("status", "active"),
-                "candidate_count": database.count_candidates(company_id, job_id=jid),
+                "candidate_count": candidate_counts.get(jid, 0),
                 "has_pending_request": is_pending,
                 "pending_request_type": pending_req.get("target_status") if is_pending else None,
             })
@@ -1856,14 +1914,16 @@ def _run_interview_evaluation(
 
     if interview_type == "technical":
         result = technical_evaluator.evaluate(resume.raw_text, transcript)
-        result.setdefault("provider_used", "gemini" if technical_evaluator.api_key else "local")
+        fallback_used = not bool(technical_evaluator.api_key)
+        result["fallback_used"] = fallback_used
         if technical_evaluator.last_error:
-            result["provider_error"] = technical_evaluator.last_error
+            logger.info("Technical evaluator status: %s", technical_evaluator.last_error)
     else:
         result = hr_evaluator.evaluate(resume.raw_text, transcript)
-        result.setdefault("provider_used", "gemini" if hr_evaluator.api_key else "local")
+        fallback_used = not bool(hr_evaluator.api_key)
+        result["fallback_used"] = fallback_used
         if hr_evaluator.last_error:
-            result["provider_error"] = hr_evaluator.last_error
+            logger.info("HR evaluator status: %s", hr_evaluator.last_error)
 
     # Preserve existing recording metadata if the interview doc already has one
     existing_doc = database.get_candidate_doc(email, company_id, job_id) or {}
@@ -1964,11 +2024,23 @@ def _ensure_invitation_active(token: str, candidate_doc: dict) -> dict:
     return invitation
 
 
-def _auto_fail_missed_deadlines(company_id: str | None, job_id: str | None, job_doc: dict) -> None:
+def _auto_fail_missed_deadlines(
+    company_id: str | None,
+    job_id: str | None,
+    job_doc: dict,
+    docs_by_email: dict[str, dict] | None = None,
+) -> None:
     if not company_id or not job_id:
         return
-    for resume in database.load_candidates(company_id, job_id=job_id):
-        doc = database.get_candidate_doc(resume.email, company_id, job_id) or {}
+    if docs_by_email is None:
+        docs_by_email = database.get_candidate_docs_batch(
+            [r.email for r in database.load_candidates(company_id, job_id=job_id)],
+            company_id,
+            job_id,
+        )
+    for email, doc in docs_by_email.items():
+        if not doc:
+            continue
         for interview_type, invitation_key, interview_key in (
             ("hr", "hr_invitation", "hr_interview"),
             ("technical", "invitation", "technical_interview"),
@@ -1986,9 +2058,11 @@ def _auto_fail_missed_deadlines(company_id: str | None, job_id: str | None, job_
                     "reason": "Interview deadline passed before completion.",
                 }
                 if interview_type == "hr":
-                    database.set_candidate_hr_interview(resume.email, failed, company_id, job_id)
+                    database.set_candidate_hr_interview(email, failed, company_id, job_id)
+                    doc["hr_interview"] = failed
                 else:
-                    database.set_candidate_technical_interview(resume.email, failed, company_id, job_id)
+                    database.set_candidate_technical_interview(email, failed, company_id, job_id)
+                    doc["technical_interview"] = failed
 
 
 def _candidate_ref_for_token(token: str) -> tuple[str | None, str | None]:

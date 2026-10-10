@@ -15,6 +15,7 @@ import {
   Database,
 } from "lucide-react";
 import { apiFetchJson } from "../../utils/api";
+import { toCsv } from "../../utils/csv";
 
 export function ActivityLogViewer({ initialCompanyId = null, companies = [] }) {
   const [logs, setLogs] = useState([]);
@@ -78,7 +79,7 @@ export function ActivityLogViewer({ initialCompanyId = null, companies = [] }) {
       l.ip_address || "-",
     ]);
 
-    const csvContent = [headers.join(","), ...rows.map((r) => r.map((cell) => `"${(cell || "").replace(/"/g, '""')}"`).join(","))].join("\n");
+    const csvContent = toCsv(rows, headers);
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");

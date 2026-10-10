@@ -5,12 +5,33 @@ import re
 
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+PHONE_RE = re.compile(r"^\+?[0-9][0-9\s().-]{6,19}$")
+
+MAX_CREDIT_ADJUSTMENT = 50000
+CREDIT_CAP_MULTIPLIER = 2
+
+# BUG 14: manage_users removed under default policy since no route enforces it
+VALID_PERMISSIONS = frozenset({
+    "manage_jobs", "manage_drive_delete", "manage_resumes", "conduct_interviews",
+    "view_pipeline", "view_usage",
+})
 
 
 def _validate_email(value: str) -> str:
     value = value.strip().lower()
     if not EMAIL_RE.match(value):
         raise ValueError("Invalid email address")
+    return value
+
+
+def _validate_phone(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return ""
+    if not PHONE_RE.match(value):
+        raise ValueError("Enter a valid phone number")
     return value
 
 
@@ -88,6 +109,11 @@ class CreateCompanyRequest(BaseModel):
     def validate_company_emails(cls, v: str) -> str:
         return _validate_email(v)
 
+    @field_validator("contact_phone")
+    @classmethod
+    def validate_contact_phone(cls, v: str) -> str:
+        return _validate_phone(v) or ""
+
     @field_validator("admin_password")
     @classmethod
     def validate_admin_password(cls, v: str) -> str:
@@ -113,6 +139,16 @@ class CreateSubUserRequest(BaseModel):
     def validate_subuser_password(cls, v: str) -> str:
         return _validate_password(v)
 
+    @field_validator("permissions")
+    @classmethod
+    def validate_permissions(cls, perms: list[str]) -> list[str]:
+        if not perms:
+            raise ValueError("Select at least one permission")
+        invalid = [p for p in perms if p not in VALID_PERMISSIONS]
+        if invalid:
+            raise ValueError(f"Invalid permissions: {', '.join(invalid)}")
+        return perms
+
 
 class UpdateCompanyRequest(BaseModel):
     plan: str | None = Field(default=None, pattern="^(starter|growth|enterprise)$")
@@ -121,15 +157,30 @@ class UpdateCompanyRequest(BaseModel):
     industry: str | None = None
     contact_phone: str | None = None
     price_adjustments: dict[str, float | None] | None = None
-    credits_adjustment: int | None = None
+    credits_adjustment: int | None = Field(default=None, ge=-MAX_CREDIT_ADJUSTMENT, le=MAX_CREDIT_ADJUSTMENT)
+
+    @field_validator("contact_phone")
+    @classmethod
+    def validate_contact_phone(cls, v: str | None) -> str | None:
+        return _validate_phone(v)
 
 
 class UpdateSubUserPermissionsRequest(BaseModel):
     permissions: list[str]
 
+    @field_validator("permissions")
+    @classmethod
+    def validate_permissions(cls, perms: list[str]) -> list[str]:
+        if not perms:
+            raise ValueError("Select at least one permission")
+        invalid = [p for p in perms if p not in VALID_PERMISSIONS]
+        if invalid:
+            raise ValueError(f"Invalid permissions: {', '.join(invalid)}")
+        return perms
+
 
 class AdjustCreditsRequest(BaseModel):
-    delta: int
+    delta: int = Field(ge=-MAX_CREDIT_ADJUSTMENT, le=MAX_CREDIT_ADJUSTMENT)
     note: str = ""
 
 
@@ -184,12 +235,6 @@ class CompanyProfile(BaseModel):
     created_at: str
     credits: dict | None = None
     plan_price: float | None = None
-
-
-VALID_PERMISSIONS = frozenset({
-    "manage_jobs", "manage_drive_delete", "manage_resumes", "conduct_interviews",
-    "view_pipeline", "manage_users", "view_usage",
-})
 
 
 # ── Plan Limits ─────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@ services:
     name: ai-hiring-platform
     runtime: docker
     dockerfilePath: Dockerfile
-    healthCheckPath: /api/auth/me
+    healthCheckPath: /api/health
     envVars:
       - key: MONGO_URI
         sync: false

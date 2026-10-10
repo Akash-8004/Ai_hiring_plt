@@ -23,6 +23,8 @@ from backend.auth.models import (
     UpdateSubUserPermissionsRequest,
     UpdateUserProfileRequest,
     VALID_PERMISSIONS,
+    MAX_CREDIT_ADJUSTMENT,
+    CREDIT_CAP_MULTIPLIER,
 )
 from backend.auth.security import (
     hash_password,
@@ -102,7 +104,7 @@ def create_company(body: CreateCompanyRequest, user: dict = Depends(require_supe
         "role": "company_admin",
         "company_id": company_id,
         "status": "active",
-        "permissions": ["manage_jobs", "manage_resumes", "conduct_interviews", "view_pipeline", "manage_users"],
+        "permissions": ["manage_jobs", "manage_resumes", "conduct_interviews", "view_pipeline"],
         "created_by": str(user.get("_id", user.get("id", ""))),
         "created_at": datetime.now(timezone.utc),
         "last_login": None,
@@ -221,6 +223,22 @@ def update_company(
         database.apply_plan_credit_change(company_id, new_limits["max_credits"])
 
     if body.credits_adjustment is not None and body.credits_adjustment != 0:
+        if abs(body.credits_adjustment) > MAX_CREDIT_ADJUSTMENT:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Credit adjustment cannot exceed {MAX_CREDIT_ADJUSTMENT} credits.",
+            )
+        credits_data = company.get("credits", {})
+        plan_name = body.plan or company.get("plan", "starter")
+        limits = database.get_plan_limits(plan_name)
+        max_allowed = CREDIT_CAP_MULTIPLIER * limits["max_credits"]
+        current_total = credits_data.get("allowance", limits["max_credits"]) + credits_data.get("adjustments", 0)
+        resulting_total = current_total + body.credits_adjustment
+        if resulting_total > max_allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Adjustment would exceed maximum allowed credits ({max_allowed} credits for {plan_name} plan).",
+            )
         database.adjust_company_credits(company_id, body.credits_adjustment)
         database.log_usage(
             "", company_id,
@@ -631,6 +649,24 @@ def admin_adjust_credits(
     company = database.get_company_by_id(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
+
+    if abs(body.delta) > MAX_CREDIT_ADJUSTMENT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Credit adjustment cannot exceed {MAX_CREDIT_ADJUSTMENT} credits.",
+        )
+    credits_data = company.get("credits", {})
+    plan_name = company.get("plan", "starter")
+    limits = database.get_plan_limits(plan_name)
+    max_allowed = CREDIT_CAP_MULTIPLIER * limits["max_credits"]
+    current_total = credits_data.get("allowance", limits["max_credits"]) + credits_data.get("adjustments", 0)
+    resulting_total = current_total + body.delta
+    if resulting_total > max_allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Adjustment would exceed maximum allowed credits ({max_allowed} credits for {plan_name} plan).",
+        )
+
     bucket = database.adjust_company_credits(company_id, body.delta)
 
     admin_user = _find_company_admin(company_id, company)
@@ -931,6 +967,12 @@ def create_sub_user(
     if database.get_user_by_email(body.email):
         raise HTTPException(status_code=400, detail="Email already in use")
 
+    if not body.permissions:
+        raise HTTPException(status_code=400, detail="Select at least one permission")
+    invalid = [p for p in body.permissions if p not in VALID_PERMISSIONS]
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid permissions: {', '.join(invalid)}")
+
     sub_user_doc = {
         "email": body.email,
         "password_hash": hash_password(body.password),
@@ -1029,6 +1071,8 @@ def update_team_member_permissions(
     if target["role"] != "sub_user":
         raise HTTPException(status_code=400, detail="Can only update sub-user permissions")
 
+    if not body.permissions:
+        raise HTTPException(status_code=400, detail="Select at least one permission")
     invalid = [p for p in body.permissions if p not in VALID_PERMISSIONS]
     if invalid:
         raise HTTPException(status_code=400, detail=f"Invalid permissions: {', '.join(invalid)}")

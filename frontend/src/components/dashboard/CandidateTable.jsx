@@ -57,6 +57,14 @@ export function CandidateTable({ candidates, onCandidate, onViewDetails }) {
                       >
                         <Sparkles size={11} /> OCR Transcribed
                       </span>
+                    ) : candidate.parsingProvider === "gemini-failed" ? (
+                      <span
+                        className="no-text-tag"
+                        style={{ color: "#d97706", borderColor: "rgba(217, 119, 6, 0.3)", background: "rgba(217, 119, 6, 0.1)" }}
+                        title="AI parsing failed; extracted using local rule-based fallback"
+                      >
+                        <AlertTriangle size={11} /> AI Fallback
+                      </span>
                     ) : null}
                   </div>
                   <span>{candidate.Email}</span>

@@ -9,9 +9,16 @@ def score_candidates(
     ranking_service: AIRankingService,
     company_id: str | None = None,
     job_id: str | None = None,
+    docs_by_email: dict[str, dict] | None = None,
 ) -> list[CandidateResult]:
     results: list[CandidateResult] = []
     seen_emails: set[str] = set()
+
+    # Pre-fetch candidate docs in one batch query if not provided
+    if company_id and docs_by_email is None and resumes:
+        docs_by_email = database.get_candidate_docs_batch(
+            [r.email for r in resumes], company_id, job_id
+        )
 
     for resume in resumes:
         if resume.email.lower() in seen_emails:
@@ -22,12 +29,23 @@ def score_candidates(
 
         # Try to use cached score if available
         if company_id:
-            doc = database.get_candidate_doc(resume.email, company_id, job_id)
-            if doc and doc.get("cached_score"):
-                try:
-                    score = ResumeScore(**doc["cached_score"])
-                except (TypeError, KeyError):
-                    score = None
+            doc = docs_by_email.get(resume.email) if docs_by_email else database.get_candidate_doc(resume.email, company_id, job_id)
+            if doc:
+                cached = doc.get("cached_score") or doc.get("scoring")
+                if cached:
+                    try:
+                        total = cached.get("total_score") if "total_score" in cached else cached.get("score")
+                        if total is not None and "breakdown" in cached:
+                            score = ResumeScore(
+                                total_score=total,
+                                recommendation=cached.get("recommendation", "Review / Reject"),
+                                matched_skills=cached.get("matched_skills", []),
+                                missing_skills=cached.get("missing_skills", []),
+                                breakdown=cached.get("breakdown", {}),
+                                summary=cached.get("summary", cached.get("explanation", "")),
+                            )
+                    except (TypeError, KeyError):
+                        score = None
 
         if score is None:
             score = ranking_service.rank_resume(resume, job)

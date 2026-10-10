@@ -124,11 +124,8 @@ export function JobEditor({ job, jobId, mode = "edit", onSave, saving, pendingRe
       });
       console.info("[questions] processed", {
         count: response.questions?.length ?? 0,
-        provider: response.provider_used,
-        message: response.message || null,
+        fallback_used: response.fallback_used ?? false,
       });
-      if (response.message) console.warn("[questions] backend warning:", response.message);
-      if (response.message) setProcessingError(response.message);
       setQuestions(response.questions);
       setManualText("");
     } catch (err) {
@@ -161,11 +158,8 @@ export function JobEditor({ job, jobId, mode = "edit", onSave, saving, pendingRe
       });
       console.info("[questions] file processed", {
         count: data.questions?.length ?? 0,
-        provider: data.provider_used,
-        message: data.message || null,
+        fallback_used: data.fallback_used ?? false,
       });
-      if (data.message) console.warn("[questions] backend warning:", data.message);
-      if (data.message) setProcessingError(data.message);
       setQuestions(data.questions);
     } catch (err) {
       console.error("[questions] file failed", {
