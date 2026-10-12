@@ -16,6 +16,56 @@ from backend.services.resume_parser import (
 
 logger = logging.getLogger(__name__)
 
+# ── Scoring rubric ──────────────────────────────────────────────────────────
+# Single source of truth for how the headline score is derived from the
+# breakdown sub-scores. Used by every scoring branch (local, Gemini, and
+# reconciliation of persisted scores) so the headline can never contradict
+# its own breakdown. (BUG 27)
+_SCORE_WEIGHTS: dict[str, float] = {
+    "Skill Match": 0.35,
+    "Experience Match": 0.2,
+    "Education Match": 0.1,
+    "Keyword Match": 0.15,
+    "Semantic Match": 0.2,
+}
+
+
+def weighted_total_from_breakdown(breakdown: dict | None) -> int | None:
+    """Compute the headline score as the weighted sum of the breakdown.
+
+    Returns ``None`` when no recognized breakdown component is present so
+    callers can fall back to an independently-provided total.
+    """
+    if not isinstance(breakdown, dict) or not breakdown:
+        return None
+    total = 0.0
+    found = False
+    for label, weight in _SCORE_WEIGHTS.items():
+        value = breakdown.get(label)
+        if value is None:
+            continue
+        found = True
+        try:
+            total += weight * float(value)
+        except (TypeError, ValueError):
+            continue
+    if not found:
+        return None
+    return max(0, min(100, round(total)))
+
+
+def reconcile_total_score(total: int | None, breakdown: dict | None) -> int | None:
+    """Ensure a headline score is consistent with its own breakdown.
+
+    When a breakdown is available the authoritative headline is the weighted
+    rubric total; otherwise the originally supplied total is kept unchanged.
+    """
+    weighted = weighted_total_from_breakdown(breakdown)
+    if weighted is None:
+        return total
+    return weighted
+
+
 _shared_ranking_service: "AIRankingService | None" = None
 _local_ranking_service: "AIRankingService | None" = None
 
@@ -147,13 +197,22 @@ class AIRankingService:
         education_score = self._education_score(resume.education, job.education)
         semantic_score = round((skill_score * 0.65) + (keyword_score * 0.35))
 
-        total = round(
-            (skill_score * 0.35)
-            + (experience_score * 0.2)
-            + (education_score * 0.1)
-            + (keyword_score * 0.15)
-            + (semantic_score * 0.2)
-        )
+        breakdown = {
+            "Skill Match": skill_score,
+            "Experience Match": experience_score,
+            "Education Match": education_score,
+            "Keyword Match": keyword_score,
+            "Semantic Match": semantic_score,
+        }
+        total = weighted_total_from_breakdown(breakdown)
+        if total is None:
+            total = round(
+                (skill_score * 0.35)
+                + (experience_score * 0.2)
+                + (education_score * 0.1)
+                + (keyword_score * 0.15)
+                + (semantic_score * 0.2)
+            )
 
         if skills_not_detected:
             recommendation = "Review / Reject"
@@ -170,13 +229,7 @@ class AIRankingService:
             recommendation=recommendation,
             matched_skills=[_display_skill(skill) for skill in matched],
             missing_skills=[_display_skill(skill) for skill in missing],
-            breakdown={
-                "Skill Match": skill_score,
-                "Experience Match": experience_score,
-                "Education Match": education_score,
-                "Keyword Match": keyword_score,
-                "Semantic Match": semantic_score,
-            },
+            breakdown=breakdown,
             summary=summary,
         )
 
@@ -220,10 +273,12 @@ class AIRankingService:
             "Keyword Match": _bounded_int(parsed.get("breakdown", {}).get("Keyword Match", 0)),
             "Semantic Match": _bounded_int(parsed.get("breakdown", {}).get("Semantic Match", 0)),
         }
-        total_score = _bounded_int(parsed.get("total_score", 0))
-        recommendation = str(parsed.get("recommendation", "")).strip()
-        if recommendation not in {"Shortlist", "Review / Reject"}:
-            recommendation = "Shortlist" if total_score >= job.threshold else "Review / Reject"
+        total_score = reconcile_total_score(
+            _bounded_int(parsed.get("total_score", 0)), breakdown
+        )
+        # Recommendation must agree with the reconciled headline, otherwise the
+        # stored verdict can contradict the shown breakdown. (BUG 27)
+        recommendation = "Shortlist" if total_score >= job.threshold else "Review / Reject"
 
         return ResumeScore(
             total_score=total_score,

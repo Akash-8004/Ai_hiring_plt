@@ -29,11 +29,11 @@ export function MarketingFooter() {
         {/* Product Column */}
         <div className="mkt-footer-col">
           <h4>Platform</h4>
-          <Link to="/features">AI Resume Screening</Link>
-          <Link to="/features">Live Voice AI Interviews</Link>
-          <Link to="/features">Hiring Pipeline</Link>
-          <Link to="/features">Anti-Cheat Proctoring</Link>
-          <Link to="/features">RBAC &amp; Seat Management</Link>
+          <Link to="/features#resume-screening">AI Resume Screening</Link>
+          <Link to="/features#voice-interviews">Live Voice AI Interviews</Link>
+          <Link to="/features#pipeline">Hiring Pipeline</Link>
+          <Link to="/features#proctoring">Anti-Cheat Proctoring</Link>
+          <Link to="/features#pipeline">RBAC &amp; Seat Management</Link>
         </div>
 
         {/* Solutions Column */}

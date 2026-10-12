@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { createPortal } from "react-dom";
-import { CheckCircle2, Clock, Send, ShieldAlert, XCircle } from "lucide-react";
+import { CheckCircle2, Clock, RotateCcw, Send, ShieldAlert, XCircle } from "lucide-react";
 import { CopyButton } from "../common/CopyButton";
 import { OverrideReasonDialog } from "./OverrideReasonDialog";
 
@@ -52,6 +52,7 @@ function OverrideBadges({ overrides }) {
 export function PipelineCandidateRow({
   candidate,
   onInvite,
+  onReopen,
   canInvite = false,
   busy,
   techLocked = false,
@@ -134,6 +135,19 @@ export function PipelineCandidateRow({
     );
   };
 
+  const reopenButton = (type) => (
+    <button
+      type="button"
+      className="secondary-button small"
+      onClick={() => onReopen(candidate.Email, type)}
+      disabled={busy}
+      title="Re-open this interview for a fresh attempt"
+    >
+      <RotateCcw size={14} />
+      Reopen
+    </button>
+  );
+
   // --- HR Invitation Cell ---
   let hrInviteCell;
   if (hrInterview.status === "completed") {
@@ -183,6 +197,16 @@ export function PipelineCandidateRow({
         <span>Score {hrInterview.score}%</span>
       </div>
     );
+  } else if (hrInterview.status === "in_progress") {
+    hrResultCell = (
+      <div className="interview-result">
+        <span className="status-badge invited">
+          <Clock size={15} />
+          {hrInterview.abandoned_at ? "Left early" : "In progress"}
+        </span>
+        {canInvite && onReopen ? reopenButton("hr") : null}
+      </div>
+    );
   } else if (hrInvitation?.link) {
     hrResultCell = <span className="muted-cell">Awaiting candidate</span>;
   } else {
@@ -200,6 +224,16 @@ export function PipelineCandidateRow({
           {techInterview.decision}
         </span>
         <span>Score {techInterview.score}%</span>
+      </div>
+    );
+  } else if (techInterview.status === "in_progress") {
+    techCell = (
+      <div className="interview-result">
+        <span className="status-badge invited">
+          <Clock size={15} />
+          {techInterview.abandoned_at ? "Left early" : "In progress"}
+        </span>
+        {canInvite && onReopen ? reopenButton("technical") : null}
       </div>
     );
   } else if (invitation?.link && techEmailSent) {

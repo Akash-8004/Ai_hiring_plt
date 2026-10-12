@@ -375,7 +375,7 @@ export function createLiveClient({ token, initialStream = null, onReady, onTrans
       }
       switch (msg.type) {
         case "ready":
-          onReady && onReady();
+          onReady && onReady(msg);
           break;
         case "audio":
           enqueuePcm(msg.data);

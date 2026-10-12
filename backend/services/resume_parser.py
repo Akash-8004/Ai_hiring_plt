@@ -9,10 +9,31 @@ from pathlib import Path
 from typing import BinaryIO
 
 from backend.core.models import ParsedResume
+from backend.core.sanitizer import strip_html
 from backend.config import load_env
 from backend.services.ocr import OCR_MIME_BY_EXT, ocr_document
 
 logger = logging.getLogger(__name__)
+
+# Free-text resume fields that are persisted and rendered.  Kept html-free on
+# write (strip-on-write) so stored values are always consistent plain text,
+# matching the lead-form write-path policy (BUGS 25/28).
+_SANITIZED_TEXT_FIELDS = (
+    "file_name",
+    "full_name",
+    "education",
+    "job_title",
+    "location",
+    "summary",
+)
+
+
+def _sanitize_resume_fields(resume: ParsedResume) -> ParsedResume:
+    for field in _SANITIZED_TEXT_FIELDS:
+        value = getattr(resume, field, None)
+        if isinstance(value, str):
+            setattr(resume, field, strip_html(value))
+    return resume
 
 
 SKILL_ALIASES: dict[str, str] = {
@@ -371,19 +392,21 @@ def _is_text_empty(text: str) -> bool:
 def _empty_resume(file_name: str, text: str) -> ParsedResume:
     """Return a placeholder ParsedResume flagged as having no extractable text."""
     name = Path(file_name).stem.replace("_", " ").replace("-", " ").title()
-    return ParsedResume(
-        file_name=file_name,
-        full_name=name,
-        email="not-found@example.com",
-        phone="Not found",
-        skills=[],
-        experience_years=0,
-        education="Not found",
-        raw_text="[NO_TEXT_EXTRACTED] The uploaded file contained no readable text. "
-                 "This usually means the PDF is a scanned image without an embedded "
-                 "text layer, or the DOCX file is corrupted. Please re-upload a "
-                 "text-based PDF, DOCX, or TXT file.",
-        parsing_provider="none",
+    return _sanitize_resume_fields(
+        ParsedResume(
+            file_name=file_name,
+            full_name=name,
+            email="not-found@example.com",
+            phone="Not found",
+            skills=[],
+            experience_years=0,
+            education="Not found",
+            raw_text="[NO_TEXT_EXTRACTED] The uploaded file contained no readable text. "
+                     "This usually means the PDF is a scanned image without an embedded "
+                     "text layer, or the DOCX file is corrupted. Please re-upload a "
+                     "text-based PDF, DOCX, or TXT file.",
+            parsing_provider="none",
+        )
     )
 
 
@@ -403,19 +426,21 @@ def parse_resume_text(file_name: str, text: str) -> ParsedResume:
     github = _first_match(r"(github\.com/[^\s,]+)", normalized, "")
     other_links = _extract_other_links(normalized, linkedin)
 
-    return ParsedResume(
-        file_name=file_name,
-        full_name=name,
-        email=email,
-        phone=phone,
-        skills=skills,
-        experience_years=experience,
-        education=education,
-        linkedin=linkedin,
-        github=github,
-        raw_text=text,
-        other_links=other_links,
-        parsing_provider="regex-fallback",
+    return _sanitize_resume_fields(
+        ParsedResume(
+            file_name=file_name,
+            full_name=name,
+            email=email,
+            phone=phone,
+            skills=skills,
+            experience_years=experience,
+            education=education,
+            linkedin=linkedin,
+            github=github,
+            raw_text=text,
+            other_links=other_links,
+            parsing_provider="regex-fallback",
+        )
     )
 
 
@@ -463,22 +488,24 @@ def parse_resume_text_with_ai(file_name: str, text: str) -> ParsedResume:
             len(extracted_skills),
         )
 
-        return ParsedResume(
-            file_name=file_name,
-            full_name=_string(parsed.get("full_name"), "Not found"),
-            email=_string(parsed.get("email"), "not-found@example.com"),
-            phone=_string(parsed.get("phone"), "Not found"),
-            skills=extracted_skills,
-            experience_years=_nonnegative_int(parsed.get("experience_years")),
-            education=_string(parsed.get("education"), "Not found"),
-            linkedin=_string(parsed.get("linkedin")),
-            github=_string(parsed.get("github")),
-            raw_text=text,
-            job_title=_string(parsed.get("job_title")),
-            location=_string(parsed.get("location")),
-            summary=_string(parsed.get("summary")),
-            parsing_provider="gemini",
-            other_links=_link_list(model_links),
+        return _sanitize_resume_fields(
+            ParsedResume(
+                file_name=file_name,
+                full_name=_string(parsed.get("full_name"), "Not found"),
+                email=_string(parsed.get("email"), "not-found@example.com"),
+                phone=_string(parsed.get("phone"), "Not found"),
+                skills=extracted_skills,
+                experience_years=_nonnegative_int(parsed.get("experience_years")),
+                education=_string(parsed.get("education"), "Not found"),
+                linkedin=_string(parsed.get("linkedin")),
+                github=_string(parsed.get("github")),
+                raw_text=text,
+                job_title=_string(parsed.get("job_title")),
+                location=_string(parsed.get("location")),
+                summary=_string(parsed.get("summary")),
+                parsing_provider="gemini",
+                other_links=_link_list(model_links),
+            )
         )
     except Exception as exc:
         model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")

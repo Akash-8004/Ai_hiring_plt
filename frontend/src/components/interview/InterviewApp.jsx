@@ -93,6 +93,8 @@ export function InterviewApp({ token, interviewType }) {
         if (data.completed) {
           setPhase("done");
           setResult({ decision: data.decision, score: data.score });
+        } else if (data.locked) {
+          setPhase("locked");
         } else {
           setPhase("ready");
         }
@@ -240,7 +242,8 @@ export function InterviewApp({ token, interviewType }) {
     const client = createLiveClient({
       token,
       initialStream: deviceCheckStream,
-      onReady: () => {
+      onReady: (payload) => {
+        if (payload?.customQuestions) setCustomQuestions(payload.customQuestions);
         setIsMicActive(true);
         // Attach camera preview and start recording
         const camStream = client.getCameraStream();
@@ -411,6 +414,7 @@ export function InterviewApp({ token, interviewType }) {
 
       <div className="interview-body">
         {phase === "expired" ? <div className="interview-stage invitation-expired"><Clock size={36} /><strong>Invitation expired</strong><p>This interview invitation is no longer available. Please contact the hiring team for assistance.</p></div> : null}
+        {phase === "locked" ? <div className="interview-stage invitation-expired"><ShieldAlert size={36} /><strong>Interview already started</strong><p>This interview has already been started and cannot be reopened from this link. Please contact the hiring team if you need another attempt.</p></div> : null}
         {error && phase !== "expired" ? <div className="notice error">{error}</div> : null}
 
         {phase === "loading" && (
@@ -475,7 +479,7 @@ export function InterviewApp({ token, interviewType }) {
               </div>
             )}
 
-            {isTechnical && customQuestions.length > 0 ? (
+            {isTechnical && (session?.hasCodingQuestions || customQuestions.length > 0) ? (
               <div className="instructions-note">
                 <Code2 size={18} />
                 <p><strong>Coding Questions:</strong> The interviewer may also ask you coding questions from the company's question bank. When a coding question is asked, a <strong>textbox</strong> will appear below the conversation for you to type your answer.</p>

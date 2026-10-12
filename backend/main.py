@@ -25,7 +25,12 @@ from backend.core.sanitizer import strip_html as _strip_html
 from backend.core.sample_data import DEFAULT_JOB
 from backend.config import frontend_base_url
 from backend.live.relay import GeminiLiveRelay
-from backend.services.ai_ranker import AIRankingService, get_ranking_service, get_local_ranking_service
+from backend.services.ai_ranker import (
+    AIRankingService,
+    get_ranking_service,
+    get_local_ranking_service,
+    reconcile_total_score,
+)
 from backend.services.HR_Round.hr_evaluator import HREvaluator
 from backend.services.Technical.interviewer import get_interviewer_prompt
 from backend.services.Technical.question_processor import QuestionProcessor
@@ -85,7 +90,7 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"
+    response.headers["Permissions-Policy"] = "camera=(self), microphone=(self), geolocation=()"
     # Content-Security-Policy — tuned for React/Vite SPA + Google Fonts + WebSocket + media
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
@@ -1056,6 +1061,59 @@ def invite_candidate(
         payload["email_error"] = email_error
     return payload
 
+
+@app.post("/api/candidates/{email}/interview/reset")
+def reopen_candidate_interview(
+    email: str,
+    interview_type: str = "technical",
+    user: dict = Depends(require_permission("conduct_interviews")),
+    request: Request = None,
+) -> dict[str, Any]:
+    """Re-open a started-but-unfinished interview for a fresh attempt.
+
+    A candidate who closes the tab mid-interview burns the invitation's single
+    attempt (see ``_ensure_attempt_available``). This lets a recruiter grant
+    another attempt. Completed interviews are never re-opened, so a real result
+    cannot be wiped.
+    """
+    if interview_type not in ("hr", "technical"):
+        raise HTTPException(status_code=400, detail="Interview type must be 'hr' or 'technical'.")
+    company_id = str(user["company_id"]) if user.get("company_id") else None
+    effective_job_id = _resolve_effective_job_id(company_id)
+    candidate_doc = (
+        database.get_candidate_doc(email, company_id, effective_job_id)
+        if effective_job_id
+        else None
+    )
+    if not candidate_doc:
+        raise HTTPException(status_code=404, detail="Candidate not found in the current job drive.")
+    job_id = candidate_doc.get("job_id") or effective_job_id
+
+    interview = candidate_doc.get(_interview_field_for_type(interview_type)) or {}
+    previous_attempts = int(interview.get("attempts_used") or 0)
+    if interview.get("status") == "completed":
+        raise HTTPException(
+            status_code=409,
+            detail="A completed interview cannot be reopened.",
+        )
+    if previous_attempts < 1 and interview.get("status") != "in_progress":
+        raise HTTPException(status_code=400, detail="This interview has not been started yet.")
+
+    database.reset_candidate_interview(email, interview_type, company_id, job_id)
+    log_activity(
+        action="candidate.interview_reopened",
+        category="candidate",
+        actor=user,
+        target_type="candidate",
+        target_id=email,
+        target_label=email,
+        metadata={"interview_type": interview_type, "previous_attempts": previous_attempts},
+        severity="warning",
+        request=request,
+    )
+    return _workspace_payload(company_id, user, job_id=_active_drive_id(company_id))
+
+
 @app.get("/api/interview/session/{token}")
 def interview_session(token: str) -> dict[str, Any]:
     """Public endpoint — candidates access via invitation token, no auth needed."""
@@ -1079,17 +1137,12 @@ def interview_session(token: str) -> dict[str, Any]:
     ) or database.load_job(company_id) or DEFAULT_JOB
 
     # Determine interview type from the invitation
-    invitation = candidate_doc.get("invitation") or {}
-    hr_invitation = candidate_doc.get("hr_invitation") or {}
-    if invitation.get("token") == token:
-        interview_type = invitation.get("type", "technical")
-        interview_data = candidate_doc.get("technical_interview") or {}
-    elif hr_invitation.get("token") == token:
-        interview_type = "hr"
-        interview_data = candidate_doc.get("hr_interview") or candidate_doc.get("interview") or {}
-    else:
-        interview_type = "technical"
-        interview_data = {}
+    interview_type = _resolve_interview_type(token, candidate_doc)
+    interview_data = (
+        candidate_doc.get("technical_interview") or {}
+        if interview_type == "technical"
+        else (candidate_doc.get("hr_interview") or candidate_doc.get("interview") or {})
+    )
 
     # Load company name for branding
     company_name = "AI Hiring Platform"
@@ -1104,18 +1157,27 @@ def interview_session(token: str) -> dict[str, Any]:
     # Redact candidate name to first name only for this public endpoint
     first_name = (resume.full_name or "Candidate").split()[0] if resume.full_name else "Candidate"
 
+    interview_status = interview_data.get("status")
+    is_completed = interview_status == "completed"
+    attempts_used = int(interview_data.get("attempts_used") or 0)
+
     return {
         "token": token,
         "candidateName": first_name,
         "jobTitle": current_job.title,
         "companyName": company_name,
         "interviewType": interview_type,
-        "customQuestions": (
-            _sanitized_questions(current_job.custom_questions)
-            if interview_type == "technical"
-            else []
+        # Questions are withheld until the interview actually starts (delivered
+        # over the WebSocket) so the link cannot be used to preview them.
+        "customQuestions": [],
+        "hasCodingQuestions": bool(
+            interview_type == "technical" and current_job.custom_questions
         ),
-        "completed": interview_data.get("status") == "completed",
+        "completed": is_completed,
+        # A started-but-unfinished interview stays locked: its single attempt
+        # was already consumed when the candidate connected.
+        "locked": (not is_completed) and attempts_used >= INTERVIEW_MAX_ATTEMPTS,
+        "startedAt": interview_data.get("started_at"),
         "decision": interview_data.get("decision"),
         "score": interview_data.get("score"),
     }
@@ -1274,8 +1336,18 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
     candidate_doc = database.get_candidate_doc(email, company_id)
     try:
         _ensure_invitation_active(token, candidate_doc or {})
+        interview_type = _ensure_attempt_available(token, candidate_doc or {})
     except HTTPException as exc:
-        await websocket.send_json({"type": "error", "message": exc.detail, "expired": exc.status_code == 410})
+        detail = exc.detail
+        message = detail.get("message") if isinstance(detail, dict) else detail
+        code = detail.get("code") if isinstance(detail, dict) else None
+        await websocket.send_json({
+            "type": "error",
+            "message": message,
+            "code": code,
+            "locked": exc.status_code == 409,
+            "expired": exc.status_code == 410,
+        })
         await websocket.close(code=1008)
         return
     job_id = (candidate_doc or {}).get("job_id")
@@ -1289,15 +1361,6 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
     current_job = (
         database.get_job_by_id(str(company_id), job_id) if company_id and job_id else None
     ) or database.load_job(company_id) or DEFAULT_JOB
-    doc = candidate_doc or {}
-    invitation = doc.get("invitation") or {}
-    hr_invitation = doc.get("hr_invitation") or {}
-    if invitation.get("token") == token:
-        interview_type = invitation.get("type", "technical")
-    elif hr_invitation.get("token") == token:
-        interview_type = "hr"
-    else:
-        interview_type = "technical"
 
     system_prompt = get_interviewer_prompt(interview_type, current_job, resume)
     relay = GeminiLiveRelay(system_prompt=system_prompt)
@@ -1496,11 +1559,25 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
             await send_ws({"type": "error", "message": str(exc)})
             done.set()
 
+    # Tracks whether the attempt was actually consumed, so a relay that fails
+    # to connect never marks a never-started interview as abandoned.
+    started = False
     try:
         async with relay.connect() as session:
             to_gemini: asyncio.Queue = asyncio.Queue()
             done: asyncio.Event = asyncio.Event()
-            await send_ws({"type": "ready"})
+            # Consume the single attempt only once the relay is live. From this
+            # point on, closing the tab leaves the interview locked.
+            database.mark_interview_started(email, interview_type, company_id, job_id)
+            started = True
+            await send_ws({
+                "type": "ready",
+                "customQuestions": (
+                    _sanitized_questions(current_job.custom_questions)
+                    if interview_type == "technical"
+                    else []
+                ),
+            })
             state: dict = {"model_active": False}
             tasks = [
                 asyncio.create_task(client_loop(to_gemini, done)),
@@ -1515,6 +1592,9 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
     except Exception as exc:
         await send_ws({"type": "error", "message": str(exc)})
     finally:
+        if started:
+            # No-op when the interview already completed (status == completed).
+            database.mark_interview_abandoned(email, interview_type, company_id, job_id)
         await send_ws({"type": "closed"})
         try:
             await websocket.close()
@@ -1587,8 +1667,11 @@ def _workspace_payload(
         scoring = doc.get("scoring") or {}
         cached = doc.get("cached_score") or {}
         overall_score = scoring.get("score") if scoring.get("score") is not None else cached.get("total_score")
+        breakdown = scoring.get("breakdown") or cached.get("breakdown") or {}
+        # BUG 27: reconcile the headline with its own breakdown, so a
+        # persisted/stale AI total can never contradict the shown sub-scores.
+        overall_score = reconcile_total_score(overall_score, breakdown)
         if overall_score is not None:
-            breakdown = scoring.get("breakdown") or cached.get("breakdown") or {}
             explanation = scoring.get("explanation") or cached.get("summary") or ""
             reasons = scoring.get("reasons") or []
             threshold = getattr(current_job, "threshold", 80)
@@ -2022,6 +2105,59 @@ def _ensure_invitation_active(token: str, candidate_doc: dict) -> dict:
             detail="This interview invitation has expired. Please contact the hiring team.",
         )
     return invitation
+
+
+#: Each invitation grants a single interview attempt. The attempt is consumed
+#: when the live relay connects, so abandoning mid-interview cannot be used to
+#: preview the questions and retry. A recruiter can re-open it explicitly.
+INTERVIEW_MAX_ATTEMPTS = 1
+
+
+def _interview_field_for_type(interview_type: str) -> str:
+    return "hr_interview" if interview_type == "hr" else "technical_interview"
+
+
+def _resolve_interview_type(token: str, candidate_doc: dict) -> str:
+    """Return the interview round an invitation token belongs to."""
+    if (candidate_doc.get("hr_invitation") or {}).get("token") == token:
+        return "hr"
+    invitation = candidate_doc.get("invitation") or {}
+    if invitation.get("token") == token:
+        return invitation.get("type", "technical")
+    return "technical"
+
+
+def _ensure_attempt_available(token: str, candidate_doc: dict) -> str:
+    """Reject a re-opened interview whose single attempt has been spent.
+
+    Completion is read from the stored interview status, which is written only
+    by the evaluator or the deadline auto-fail. A candidate who closes the tab
+    mid-interview leaves the status ``in_progress`` with ``attempts_used >= 1``,
+    so this guard blocks the retry until a recruiter re-opens it.
+    """
+    interview_type = _resolve_interview_type(token, candidate_doc)
+    interview = candidate_doc.get(_interview_field_for_type(interview_type)) or {}
+    if interview.get("status") == "completed":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "interview_completed",
+                "message": "This interview has already been completed.",
+            },
+        )
+    attempts = int(interview.get("attempts_used") or 0)
+    if attempts >= INTERVIEW_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "attempt_consumed",
+                "message": (
+                    "This interview has already been started. "
+                    "Contact the hiring team to reopen it."
+                ),
+            },
+        )
+    return interview_type
 
 
 def _auto_fail_missed_deadlines(

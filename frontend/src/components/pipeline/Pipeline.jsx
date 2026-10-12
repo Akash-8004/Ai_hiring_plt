@@ -53,7 +53,7 @@ function deadlineStatus(deadline) {
   return `${Math.floor(hours / 24)}d ${hours % 24}h remaining`;
 }
 
-export function Pipeline({ candidates, onInvite, onRefresh, onDeadline, deadlines = {}, canInvite = false, busy }) {
+export function Pipeline({ candidates, onInvite, onReopen, onRefresh, onDeadline, deadlines = {}, canInvite = false, busy }) {
   const [deadlineValues, setDeadlineValues] = useState({ hr: toInputValue(deadlines.hr), technical: toInputValue(deadlines.technical) });
 
   useEffect(() => {
@@ -175,6 +175,7 @@ export function Pipeline({ candidates, onInvite, onRefresh, onDeadline, deadline
                     key={`${candidate.Email}-${candidate.Name}`}
                     candidate={candidate}
                     onInvite={onInvite}
+                    onReopen={onReopen}
                     canInvite={canInvite}
                     busy={busy}
                     techLocked={techLocked}

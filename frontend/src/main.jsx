@@ -275,6 +275,24 @@ function App() {
     }
   }
 
+  async function reopenInterview(email, interviewType = "technical") {
+    setSaving(true);
+    setError("");
+    try {
+      const params = new URLSearchParams({ interview_type: interviewType });
+      const data = await apiFetchJson(
+        `/api/candidates/${encodeURIComponent(email)}/interview/reset?${params.toString()}`,
+        { method: "POST" }
+      );
+      setWorkspace(data);
+      setActiveJobId(data.job_id || null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function updateDeadline(interviewType, deadline) {
     setSaving(true);
     setError("");
@@ -429,6 +447,7 @@ function App() {
           <Pipeline
             candidates={workspace?.candidates || []}
             onInvite={inviteCandidate}
+            onReopen={reopenInterview}
             onRefresh={refresh}
             onDeadline={updateDeadline}
             deadlines={workspace?.deadlines}

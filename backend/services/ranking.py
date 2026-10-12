@@ -1,5 +1,5 @@
 from backend.core.models import CandidateResult, JobDescription, ParsedResume, ResumeScore
-from backend.services.ai_ranker import AIRankingService
+from backend.services.ai_ranker import AIRankingService, reconcile_total_score
 from backend.storage import database
 
 
@@ -35,13 +35,14 @@ def score_candidates(
                 if cached:
                     try:
                         total = cached.get("total_score") if "total_score" in cached else cached.get("score")
-                        if total is not None and "breakdown" in cached:
+                        breakdown = cached.get("breakdown", {})
+                        if total is not None and breakdown:
                             score = ResumeScore(
-                                total_score=total,
+                                total_score=reconcile_total_score(total, breakdown),
                                 recommendation=cached.get("recommendation", "Review / Reject"),
                                 matched_skills=cached.get("matched_skills", []),
                                 missing_skills=cached.get("missing_skills", []),
-                                breakdown=cached.get("breakdown", {}),
+                                breakdown=breakdown,
                                 summary=cached.get("summary", cached.get("explanation", "")),
                             )
                     except (TypeError, KeyError):

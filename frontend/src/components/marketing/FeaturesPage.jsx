@@ -10,6 +10,7 @@ import "./marketing.css";
 
 const FEATURE_CATEGORIES = [
   {
+    id: "resume-screening",
     category: "AI Resume Screening & Intake",
     eyebrow: "Intelligent Ingestion",
     desc: "Parse unstructured resumes at scale with deep semantic skill extraction and customizable score thresholds.",
@@ -32,6 +33,7 @@ const FEATURE_CATEGORIES = [
     ],
   },
   {
+    id: "voice-interviews",
     category: "Live Voice AI Interviewing",
     eyebrow: "Live AI Relay",
     desc: "Browser-native 2-way conversational voice interviews that evaluate technical problem solving and communication.",
@@ -54,6 +56,7 @@ const FEATURE_CATEGORIES = [
     ],
   },
   {
+    id: "proctoring",
     category: "Anti-Cheating & Proctoring",
     eyebrow: "Assessment Integrity",
     desc: "Comprehensive proctoring monitors candidate focus and flags suspicious behavior without invading privacy.",
@@ -76,6 +79,7 @@ const FEATURE_CATEGORIES = [
     ],
   },
   {
+    id: "pipeline",
     category: "Pipeline & Multi-Tenant SaaS",
     eyebrow: "Enterprise Infrastructure",
     desc: "Role-based seats, usage credit tracking, and isolated multi-tenant environments.",
@@ -118,7 +122,7 @@ export function FeaturesPage() {
       {/* ── Categories Sections ────────────────────────────────────────── */}
       <div className="mkt-section" style={{ paddingTop: "2rem" }}>
         {FEATURE_CATEGORIES.map((cat, idx) => (
-          <div key={cat.category} style={{ marginBottom: "5rem" }}>
+          <div key={cat.category} id={cat.id} style={{ marginBottom: "5rem" }}>
             <div style={{ marginBottom: "2rem" }}>
               <span className="mkt-eyebrow">{cat.eyebrow}</span>
               <h2 style={{ fontSize: "2.2rem", fontWeight: "800", color: "#ffffff", marginBottom: "0.5rem" }}>

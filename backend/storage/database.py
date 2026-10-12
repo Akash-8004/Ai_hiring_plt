@@ -16,6 +16,7 @@ from pymongo import DESCENDING, MongoClient, ReturnDocument
 
 from backend.config import load_env
 from backend.core.models import JobDescription, ParsedResume
+from backend.core.sanitizer import sanitize_dict_fields
 
 load_env()
 
@@ -1203,6 +1204,18 @@ def has_pending_jd_request(company_id: str, job_id: str) -> bool:
 # CANDIDATES — tenant-scoped
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Free-text candidate fields kept plain-text on write/read (BUG 25) — mirrors
+# the lead-form strip-on-write policy (BUG 28).
+_CANDIDATE_SANITIZED_FIELDS = (
+    "file_name",
+    "full_name",
+    "education",
+    "job_title",
+    "location",
+    "summary",
+)
+
+
 def _candidate_filter(email: str, company_id: str | None = None, job_id: str | None = None) -> dict:
     filt: dict = {"email": email}
     if company_id:
@@ -1254,6 +1267,8 @@ def load_candidates(
         clean_doc.setdefault("summary", "")
         clean_doc.setdefault("parsing_provider", "legacy")
         clean_doc.setdefault("other_links", [])
+        # Sanitize legacy rows that were persisted before strip-on-write existed
+        sanitize_dict_fields(clean_doc, _CANDIDATE_SANITIZED_FIELDS)
         if clean_doc.get("email"):
             resumes.append(ParsedResume(**clean_doc))
     return resumes
@@ -1299,6 +1314,9 @@ def upsert_candidate(
         resume_fields["company_id"] = str(company_id)
     if job_id:
         resume_fields["job_id"] = job_id
+    # BUG 25: strip-on-write so stored values are consistent plain text,
+    # regardless of which caller/parser produced the resume fields.
+    sanitize_dict_fields(resume_fields, _CANDIDATE_SANITIZED_FIELDS)
 
     # $set always updates resume data; $setOnInsert sets pipeline stage only on
     # first insert so a re-upload cannot reset an in-progress candidate.
@@ -1402,6 +1420,79 @@ def set_candidate_hr_interview(
     _candidates.update_one(
         _candidate_filter(email, company_id, job_id),
         {"$set": {"hr_interview": interview, "pipelineStage": stage}},
+    )
+
+
+def _interview_field(interview_type: str) -> str:
+    return "hr_interview" if interview_type == "hr" else "technical_interview"
+
+
+def mark_interview_started(
+    email: str,
+    interview_type: str,
+    company_id: str | None = None,
+    job_id: str | None = None,
+) -> None:
+    """Record the start of a live interview attempt.
+
+    The attempt is consumed the moment the relay connects, so closing the tab
+    cannot be used to preview questions and retry. Deliberately does NOT touch
+    ``pipelineStage`` (unlike ``set_candidate_*_interview``): merely starting an
+    interview must not move a candidate's pipeline stage.
+    """
+    field = _interview_field(interview_type)
+    _candidates.update_one(
+        _candidate_filter(email, company_id, job_id),
+        {
+            "$set": {
+                f"{field}.status": "in_progress",
+                f"{field}.started_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "$inc": {f"{field}.attempts_used": 1},
+        },
+    )
+
+
+def mark_interview_abandoned(
+    email: str,
+    interview_type: str,
+    company_id: str | None = None,
+    job_id: str | None = None,
+) -> None:
+    """Stamp an abandonment on an interview that never reached 'completed'.
+
+    The status is intentionally left as 'in_progress' so the public session
+    endpoint keeps reporting the link as locked. The guard against the
+    ``completed`` status makes this a no-op for a normally finished interview.
+    """
+    field = _interview_field(interview_type)
+    _candidates.update_one(
+        {
+            **_candidate_filter(email, company_id, job_id),
+            f"{field}.status": {"$ne": "completed"},
+        },
+        {"$set": {f"{field}.abandoned_at": datetime.now(timezone.utc).isoformat()}},
+    )
+
+
+def reset_candidate_interview(
+    email: str,
+    interview_type: str,
+    company_id: str | None = None,
+    job_id: str | None = None,
+) -> None:
+    """Re-open a started-but-unfinished interview so it can be taken again."""
+    field = _interview_field(interview_type)
+    _candidates.update_one(
+        _candidate_filter(email, company_id, job_id),
+        {
+            "$unset": {
+                f"{field}.status": "",
+                f"{field}.started_at": "",
+                f"{field}.abandoned_at": "",
+            },
+            "$set": {f"{field}.attempts_used": 0},
+        },
     )
 
 
