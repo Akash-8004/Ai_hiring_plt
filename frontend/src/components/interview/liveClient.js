@@ -188,14 +188,17 @@ export function createLiveClient({ token, initialStream = null, onReady, onTrans
     if (initialStream) {
       // Stream was already granted during the pre-flight device check on the
       // instruction page — reuse it so no permission prompt appears now.
+      if (initialStream.getVideoTracks().length === 0) {
+        throw new Error("Camera access is required to take this interview.");
+      }
       cameraStream = initialStream;
       micStream = new MediaStream(cameraStream.getAudioTracks());
       console.log("[live] reusing pre-granted media stream", {
-        camera: cameraStream.getVideoTracks().length > 0,
-        mic: micStream.getAudioTracks().length > 0,
+        camera: cameraStream.getVideoTracks().length,
+        mic: micStream.getAudioTracks().length,
       });
     } else {
-      // Request both camera and microphone
+      // Request both camera and microphone — both are mandatory.
       try {
         cameraStream = await navigator.mediaDevices.getUserMedia({
           video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
@@ -203,12 +206,8 @@ export function createLiveClient({ token, initialStream = null, onReady, onTrans
         });
         micStream = new MediaStream(cameraStream.getAudioTracks());
       } catch (e) {
-        // Camera denied — fall back to audio-only
-        console.warn("[live] camera access denied, proceeding audio-only:", e.message);
-        cameraStream = null;
-        micStream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
+        console.warn("[live] camera/mic access denied:", e.message);
+        throw new Error("Camera and microphone access is required to take this interview.");
       }
     }
 

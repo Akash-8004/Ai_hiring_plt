@@ -134,7 +134,7 @@ def test_completed_interview_is_blocked():
 # ── Public session payload ──────────────────────────────────────────────────
 
 def _call_session(candidate, token="TECH-TOKEN"):
-    with mock.patch.object(main, "_candidate_ref_for_token", return_value=("priya@example.com", "c1")), \
+    with mock.patch.object(main, "_candidate_ref_for_token", return_value=("priya@example.com", "c1", "j1")), \
          mock.patch.object(main.database, "get_candidate_doc", return_value=candidate), \
          mock.patch.object(main.database, "load_candidates", return_value=[_resume()]), \
          mock.patch.object(main.database, "get_job_by_id", return_value=_job()), \

@@ -297,7 +297,7 @@ export function TeamManagementView() {
                       </span>
                     </td>
                     <td className="text-xs text-muted">
-                      {member.last_login ? new Date(member.last_login).toLocaleDateString() : "Never"}
+                      {member.last_login ? new Date(member.last_login).toLocaleDateString(undefined, { timeZone: "Asia/Kolkata" }) : "Never"}
                     </td>
                     <td>
                       {member.role !== "company_admin" && (

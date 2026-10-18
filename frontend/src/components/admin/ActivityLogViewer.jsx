@@ -95,7 +95,7 @@ export function ActivityLogViewer({ initialCompanyId = null, companies = [] }) {
     try {
       const d = new Date(ts);
       return d.toLocaleString(undefined, {
-        timeZone: "UTC",
+        timeZone: "Asia/Kolkata",
         month: "short",
         day: "numeric",
         hour: "2-digit",

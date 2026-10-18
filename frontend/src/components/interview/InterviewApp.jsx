@@ -65,6 +65,15 @@ export function InterviewApp({ token, interviewType }) {
   const techPhaseRef = useRef("hidden");
   const activeIndexRef = useRef(0);
   const transcriptListRef = useRef(null);
+  // Mirror of customQuestions state so WebSocket callbacks (which capture the
+  // initial empty array) always see the latest questions after onReady fires.
+  const customQuestionsRef = useRef([]);
+
+  // Keep the ref in sync with state so WebSocket callbacks always see
+  // the latest questions.
+  useEffect(() => {
+    customQuestionsRef.current = customQuestions;
+  }, [customQuestions]);
 
   // ── Browser proctoring (tab switch / minimize / focus loss / fullscreen) ──
   // Strike 1 → warning modal; Strike 2 → auto-submit via endInterview().
@@ -128,7 +137,7 @@ export function InterviewApp({ token, interviewType }) {
   // Once the AI announces the written coding questions, reveal the panel and
   // show the first unanswered question.
   function checkTechTransition(text) {
-    if (!isTechnical || !customQuestions.length || techPhaseRef.current !== "hidden") return;
+    if (!isTechnical || !customQuestionsRef.current.length || techPhaseRef.current !== "hidden") return;
     if (!shouldStartTechQuestions(text)) return;
     techPhaseRef.current = "question";
     activeIndexRef.current = 0;
@@ -138,9 +147,10 @@ export function InterviewApp({ token, interviewType }) {
   }
 
   function nextUnansweredIndex(fromIndex) {
-    for (let offset = 1; offset <= customQuestions.length; offset += 1) {
-      const index = (fromIndex + offset) % customQuestions.length;
-      const id = customQuestions[index].id;
+    const questions = customQuestionsRef.current;
+    for (let offset = 1; offset <= questions.length; offset += 1) {
+      const index = (fromIndex + offset) % questions.length;
+      const id = questions[index].id;
       if (!answeredRef.current.has(id) && !skippedRef.current.has(id)) return index;
     }
     return -1;
@@ -163,9 +173,9 @@ export function InterviewApp({ token, interviewType }) {
   // move the textbox on to the next unanswered question. This keeps the panel
   // in sync when the candidate skips a question via voice.
   function checkQuestionAnnouncement(text) {
-    if (!isTechnical || !customQuestions.length || techPhaseRef.current === "hidden") return;
+    if (!isTechnical || !customQuestionsRef.current.length || techPhaseRef.current === "hidden") return;
     if (!/hiring team/.test(text || "")) return;
-    const current = customQuestions[activeIndexRef.current];
+    const current = customQuestionsRef.current[activeIndexRef.current];
     const resolved =
       !current ||
       answeredRef.current.has(current.id) ||
@@ -202,6 +212,7 @@ export function InterviewApp({ token, interviewType }) {
     setDeviceCheckStatus("requesting");
     try {
       // Same constraints the live client uses during the interview.
+      // Both camera and microphone are mandatory — no audio-only fallback.
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -209,19 +220,8 @@ export function InterviewApp({ token, interviewType }) {
       setDeviceCheckStream(stream);
       setDeviceCheckStatus("granted");
     } catch (err) {
-      // Camera missing/denied — fall back to mic-only so the candidate
-      // without a camera is not dead-ended.
       console.warn("[device-check] camera+mic request failed:", err.message);
-      try {
-        const audioOnly = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
-        setDeviceCheckStream(audioOnly);
-        setDeviceCheckStatus("granted");
-      } catch (err2) {
-        console.warn("[device-check] mic-only request failed:", err2.message);
-        setDeviceCheckStatus("denied");
-      }
+      setDeviceCheckStatus("denied");
     }
   }
 
@@ -243,7 +243,10 @@ export function InterviewApp({ token, interviewType }) {
       token,
       initialStream: deviceCheckStream,
       onReady: (payload) => {
-        if (payload?.customQuestions) setCustomQuestions(payload.customQuestions);
+        if (payload?.customQuestions) {
+          customQuestionsRef.current = payload.customQuestions;
+          setCustomQuestions(payload.customQuestions);
+        }
         setIsMicActive(true);
         // Attach camera preview and start recording
         const camStream = client.getCameraStream();
@@ -294,7 +297,7 @@ export function InterviewApp({ token, interviewType }) {
     try {
       await client.connect();
     } catch (err) {
-      setError("Live audio is unavailable on this device.");
+      setError("Camera and microphone access is required to take this interview.");
     }
   }
 
@@ -356,6 +359,7 @@ export function InterviewApp({ token, interviewType }) {
     skippedRef.current.clear();
     techPhaseRef.current = "hidden";
     activeIndexRef.current = 0;
+    customQuestionsRef.current = [];
     setTechPhase("hidden");
     setActiveIndex(0);
     setDraft("");
@@ -552,7 +556,7 @@ export function InterviewApp({ token, interviewType }) {
                 <div className="device-check-status error">
                   <XCircle size={18} />
                   <span>
-                    Access was blocked. Enable camera &amp; microphone for this site in your browser settings, then try again.
+                    Camera and microphone access is required to take this interview. Enable both for this site in your browser settings (and make sure a camera is connected), then try again.
                   </span>
                   <button type="button" className="secondary-button small" onClick={requestDeviceAccess}>
                     Try Again

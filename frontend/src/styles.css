@@ -1217,6 +1217,16 @@ td span {
   color: #7c3aed;
 }
 
+.panel-transcript {
+  margin-top: 14px;
+}
+
+.panel-transcript h4 {
+  margin: 0;
+  font-size: 13px;
+  color: #334155;
+}
+
 .interview-app {
   min-height: 100vh;
   display: grid;

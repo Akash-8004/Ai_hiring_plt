@@ -984,7 +984,7 @@ def invite_candidate(
             if _deadline_has_passed(invitation.get("expires_at")):
                 raise HTTPException(
                     status_code=400,
-                    detail="This invitation window has already expired and cannot be amended. Use 'Still Invite' to issue an override if permitted.",
+                    detail="This invitation window has already expired and cannot be amended.",
                 )
             database.set_candidate_invitation_expiry(
                 email, interview_type, per_candidate, "per_candidate", company_id, job_id
@@ -1117,11 +1117,11 @@ def reopen_candidate_interview(
 @app.get("/api/interview/session/{token}")
 def interview_session(token: str) -> dict[str, Any]:
     """Public endpoint — candidates access via invitation token, no auth needed."""
-    email, company_id = _candidate_ref_for_token(token)
+    email, company_id, token_job_id = _candidate_ref_for_token(token)
     if not email:
         raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
 
-    candidate_doc = database.get_candidate_doc(email, company_id)
+    candidate_doc = database.get_candidate_doc(email, company_id, token_job_id)
     if not candidate_doc:
         raise HTTPException(status_code=404, detail="Candidate not found.")
     _ensure_invitation_active(token, candidate_doc)
@@ -1188,10 +1188,10 @@ def interview_session(token: str) -> dict[str, Any]:
 @app.post("/api/interview/evaluate")
 def evaluate_interview(payload: EvaluationPayload) -> dict[str, Any]:
     """Public endpoint — called by interview UI after interview completes."""
-    email, company_id = _candidate_ref_for_token(payload.token)
+    email, company_id, token_job_id = _candidate_ref_for_token(payload.token)
     if not email:
         raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
-    candidate_doc = database.get_candidate_doc(email, company_id) or {}
+    candidate_doc = database.get_candidate_doc(email, company_id, token_job_id) or {}
     invitation = _ensure_invitation_active(payload.token, candidate_doc)
     if payload.interview_type != invitation.get("type", "technical"):
         raise HTTPException(status_code=400, detail="Interview type does not match invitation.")
@@ -1218,11 +1218,11 @@ async def upload_recording(
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
     """Receive the browser-recorded WebM, persist to R2 + temp_files."""
-    email, company_id = _candidate_ref_for_token(token)
+    email, company_id, token_job_id = _candidate_ref_for_token(token)
     if not email:
         raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
 
-    candidate_doc = database.get_candidate_doc(email, company_id) or {}
+    candidate_doc = database.get_candidate_doc(email, company_id, token_job_id) or {}
     _ensure_invitation_active(token, candidate_doc)
     job_id = candidate_doc.get("job_id")
 
@@ -1327,13 +1327,13 @@ def _interview_is_complete(transcript: list[dict]) -> bool:
 async def interview_live_ws(websocket: WebSocket, token: str) -> None:
     await websocket.accept()
 
-    email, company_id = _candidate_ref_for_token(token)
+    email, company_id, token_job_id = _candidate_ref_for_token(token)
     if not email:
         await websocket.send_json({"type": "error", "message": "Invitation not found or invalid."})
         await websocket.close()
         return
 
-    candidate_doc = database.get_candidate_doc(email, company_id)
+    candidate_doc = database.get_candidate_doc(email, company_id, token_job_id)
     try:
         _ensure_invitation_active(token, candidate_doc or {})
         interview_type = _ensure_attempt_available(token, candidate_doc or {})
@@ -1380,14 +1380,20 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
         text = " ".join(user_buffer).strip()
         if text:
             transcript.append({"role": "candidate", "content": text})
-            database.append_transcript_turn(email, "candidate", text, company_id=company_id, job_id=job_id)
+            database.append_transcript_turn(
+                email, "candidate", text,
+                company_id=company_id, job_id=job_id, interview_type=interview_type,
+            )
         user_buffer.clear()
 
     def flush_model_turn() -> None:
         text = " ".join(model_buffer).strip()
         if text:
             transcript.append({"role": "interviewer", "content": text})
-            database.append_transcript_turn(email, "interviewer", text, company_id=company_id, job_id=job_id)
+            database.append_transcript_turn(
+                email, "interviewer", text,
+                company_id=company_id, job_id=job_id, interview_type=interview_type,
+            )
         model_buffer.clear()
 
     async def send_ws(payload: dict) -> None:
@@ -1429,6 +1435,7 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
                             {"type": "written", "question": question},
                             company_id=company_id,
                             job_id=job_id,
+                            interview_type=interview_type,
                         )
                         await to_gemini.put(
                             (
@@ -1792,6 +1799,13 @@ def _workspace_payload(
         row["technical_interview"] = doc.get("technical_interview")
         row["hr_interview"] = doc.get("hr_interview")
         row["interview_transcript"] = doc.get("interview_transcript") or []
+        hr_transcript, tech_transcript = _split_transcript_by_round(
+            row["interview_transcript"],
+            doc.get("hr_interview"),
+            doc.get("technical_interview"),
+        )
+        row["hr_transcript"] = hr_transcript
+        row["technical_transcript"] = tech_transcript
         row["email_sent"] = doc.get("email_sent") or {}
         row["overrides"] = doc.get("overrides") or []
         row["tech_round_locked"] = _deadline_is_active(hr_deadline)
@@ -2095,6 +2109,41 @@ def _invitation_for_token(token: str, candidate_doc: dict) -> dict | None:
     return None
 
 
+def _split_transcript_by_round(
+    turns: list[dict] | None,
+    hr_interview: dict | None,
+    tech_interview: dict | None,
+) -> tuple[list[dict], list[dict]]:
+    """Split the combined interview transcript into HR and Technical turns.
+
+    New turns are tagged with an ``interview`` field. Legacy untagged turns
+    are bucketed by timestamp: HR runs first, so anything from the technical
+    round's start onward belongs to Technical, the rest to HR.
+    """
+    hr_turns: list[dict] = []
+    tech_turns: list[dict] = []
+    hr_started = (hr_interview or {}).get("started_at") or (hr_interview or {}).get("completed_at")
+    tech_started = (tech_interview or {}).get("started_at") or (tech_interview or {}).get("completed_at")
+    for turn in turns or []:
+        kind = (turn or {}).get("interview")
+        if kind == "hr":
+            hr_turns.append(turn)
+        elif kind == "technical":
+            tech_turns.append(turn)
+        else:
+            at = turn.get("at") or ""
+            if tech_started and at and at >= tech_started:
+                tech_turns.append(turn)
+            elif hr_started:
+                hr_turns.append(turn)
+            elif tech_started:
+                tech_turns.append(turn)
+            else:
+                hr_turns.append(turn)
+    return hr_turns, tech_turns
+    return None
+
+
 def _ensure_invitation_active(token: str, candidate_doc: dict) -> dict:
     invitation = _invitation_for_token(token, candidate_doc)
     if not invitation:
@@ -2201,27 +2250,28 @@ def _auto_fail_missed_deadlines(
                     doc["technical_interview"] = failed
 
 
-def _candidate_ref_for_token(token: str) -> tuple[str | None, str | None]:
-    """Resolve (email, company_id) from a globally-unique interview token.
+def _candidate_ref_for_token(token: str) -> tuple[str | None, str | None, str | None]:
+    """Resolve (email, company_id, job_id) from a globally-unique interview token.
 
     Public interview endpoints have no authenticated user, so the token is the
-    only tenant signal. Returning company_id lets callers scope every candidate
-    read/write to the owning company.
+    only tenant signal.  Returning company_id and job_id lets callers scope
+    every candidate read/write to the exact owning document — critical when the
+    same email exists across multiple job drives.
     """
     if not token:
-        return None, None
+        return None, None, None
     doc = database._candidates.find_one(
         {"$or": [{"invitation.token": token}, {"hr_invitation.token": token}]},
-        {"email": 1, "company_id": 1},
+        {"email": 1, "company_id": 1, "job_id": 1},
     )
     if not doc:
-        return None, None
-    return doc.get("email"), doc.get("company_id")
+        return None, None, None
+    return doc.get("email"), doc.get("company_id"), doc.get("job_id")
 
 
 def _email_for_token(token: str) -> str | None:
     """Find candidate email by interview token (email-only convenience wrapper)."""
-    email, _ = _candidate_ref_for_token(token)
+    email, _, _ = _candidate_ref_for_token(token)
     return email
 
 

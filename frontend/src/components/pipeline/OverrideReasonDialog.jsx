@@ -87,8 +87,13 @@ export function OverrideReasonDialog({
     !busy;
 
   const handleConfirm = () => {
+    // Only send a per-candidate deadline when the field is actually shown
+    // (drive deadline passed, late entry, or amend). When the drive deadline
+    // is still active the backend falls back to the drive deadline so the
+    // candidate's link expires together with everyone else's.
+    const includeDeadline = needsDeadline || isAmend;
     let isoDeadline = "";
-    if (deadline) {
+    if (includeDeadline && deadline) {
       const parsed = new Date(deadline);
       if (!Number.isNaN(parsed.getTime())) {
         isoDeadline = parsed.toISOString();
@@ -137,7 +142,7 @@ export function OverrideReasonDialog({
               </>
             ) : needsOverride ? (
               <>
-                <strong>{candidateName}</strong> did not clear {gateLabel}. You can still invite them to the {roundLabel} round, but this bypass is recorded against your account for audit.
+                <strong>{candidateName}</strong> did not clear {gateLabel}. You can still invite them to the {roundLabel} round — their link will expire with the drive deadline ({roundLabel} round). This bypass is recorded against your account for audit.
               </>
             ) : (
               <>

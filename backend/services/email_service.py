@@ -1,10 +1,11 @@
 """Email sending service with MongoDB logging.
 
-Supports two transports chosen via the ``EMAIL_PROVIDER`` env var:
+Supports transports chosen via the ``EMAIL_PROVIDER`` env var:
 
 * ``smtp`` (default): SMTP/TLS via Python's built-in smtplib + email.mime.
-* ``sendgrid``: HTTPS API (port 443, works on Render's free tier where outbound
-  SMTP ports 25/465/587 are blocked).
+* ``brevo``: HTTPS API (port 443, works on Render's free tier where outbound
+  SMTP ports 25/465/587 are blocked). Free tier: 300 emails/day.
+* ``sendgrid``: HTTPS API — kept commented out; uncomment to re-enable.
 
 Configuration is pulled from environment variables.
 """
@@ -58,7 +59,7 @@ def _post_json(url: str, headers: dict, payload: dict, timeout: int = EMAIL_TIME
         return {"ok": False, "status": 0, "body": str(exc)}
 
 
-def _send_via_sendgrid(
+def _send_via_brevo(
     to_email: str,
     subject: str,
     html_body: str,
@@ -66,30 +67,68 @@ def _send_via_sendgrid(
     from_email: str,
     from_name: str,
 ) -> dict:
-    """Send an email through the SendGrid v3 Mail Send API."""
-    api_key = os.getenv("SENDGRID_API_KEY", "").strip()
+    """Send an email through the Brevo (formerly Sendinblue) v3 SMTP Email API."""
+    api_key = os.getenv("BREVO_API_KEY", "").strip()
     if not api_key:
-        return {"ok": False, "error": "EMAIL_PROVIDER=sendgrid but SENDGRID_API_KEY is not set"}
-
-    content = [{"type": "text/plain", "value": plain_body or html_body}]
-    content.append({"type": "text/html", "value": html_body})
+        return {"ok": False, "error": "EMAIL_PROVIDER=brevo but BREVO_API_KEY is not set"}
 
     payload = {
-        "personalizations": [{"to": [{"email": to_email}]}],
-        "from": {"email": from_email, "name": from_name},
+        "sender": {"email": from_email, "name": from_name},
+        "to": [{"email": to_email}],
         "subject": subject,
-        "content": content,
+        "htmlContent": html_body,
     }
+    if plain_body:
+        payload["textContent"] = plain_body
 
     res = _post_json(
-        "https://api.sendgrid.com/v3/mail/send",
-        {"Authorization": f"Bearer {api_key}"},
+        "https://api.brevo.com/v3/smtp/email",
+        {"api-key": api_key},
         payload,
     )
     if res["ok"]:
         return {"ok": True}
     detail = res["body"] or "unknown error"
-    return {"ok": False, "error": f"SendGrid HTTP {res['status']}: {detail[:500]}"}
+    return {"ok": False, "error": f"Brevo HTTP {res['status']}: {detail[:500]}"}
+
+
+# ── SendGrid (kept for easy rollback) ──────────────────────────────────────
+# To re-enable SendGrid:
+#   1. Uncomment the function below and the sendgrid branch in send_email().
+#   2. Set EMAIL_PROVIDER=sendgrid and SENDGRID_API_KEY in .env.
+#
+# def _send_via_sendgrid(
+#     to_email: str,
+#     subject: str,
+#     html_body: str,
+#     plain_body: str | None,
+#     from_email: str,
+#     from_name: str,
+# ) -> dict:
+#     """Send an email through the SendGrid v3 Mail Send API."""
+#     api_key = os.getenv("SENDGRID_API_KEY", "").strip()
+#     if not api_key:
+#         return {"ok": False, "error": "EMAIL_PROVIDER=sendgrid but SENDGRID_API_KEY is not set"}
+#
+#     content = [{"type": "text/plain", "value": plain_body or html_body}]
+#     content.append({"type": "text/html", "value": html_body})
+#
+#     payload = {
+#         "personalizations": [{"to": [{"email": to_email}]}],
+#         "from": {"email": from_email, "name": from_name},
+#         "subject": subject,
+#         "content": content,
+#     }
+#
+#     res = _post_json(
+#         "https://api.sendgrid.com/v3/mail/send",
+#         {"Authorization": f"Bearer {api_key}"},
+#         payload,
+#     )
+#     if res["ok"]:
+#         return {"ok": True}
+#     detail = res["body"] or "unknown error"
+#     return {"ok": False, "error": f"SendGrid HTTP {res['status']}: {detail[:500]}"}
 
 
 def send_email(to_email: str, subject: str, html_body: str, plain_body: str | None = None) -> dict:
@@ -101,12 +140,20 @@ def send_email(to_email: str, subject: str, html_body: str, plain_body: str | No
     """
     provider = _active_provider()
 
-    if provider == "sendgrid":
+    if provider == "brevo":
         from_email = os.getenv("SMTP_FROM_EMAIL", "").strip()
         from_name = os.getenv("SMTP_FROM_NAME", "AI Hiring Platform").strip()
         if not from_email:
-            return {"ok": False, "error": "SMTP_FROM_EMAIL not set (used as the SendGrid sender)"}
-        return _send_via_sendgrid(to_email, subject, html_body, plain_body, from_email, from_name)
+            return {"ok": False, "error": "SMTP_FROM_EMAIL not set (used as the Brevo sender)"}
+        return _send_via_brevo(to_email, subject, html_body, plain_body, from_email, from_name)
+
+    # ── SendGrid branch (commented out — uncomment to re-enable) ──
+    # if provider == "sendgrid":
+    #     from_email = os.getenv("SMTP_FROM_EMAIL", "").strip()
+    #     from_name = os.getenv("SMTP_FROM_NAME", "AI Hiring Platform").strip()
+    #     if not from_email:
+    #         return {"ok": False, "error": "SMTP_FROM_EMAIL not set (used as the SendGrid sender)"}
+    #     return _send_via_sendgrid(to_email, subject, html_body, plain_body, from_email, from_name)
 
     if not _smtp_configured():
         return {"ok": False, "error": "SMTP not configured"}

@@ -131,8 +131,8 @@ export function JdApprovalPanel({ requests = [], onResolved, isCompanyAdmin = tr
                     </span>
                   </div>
                   <span className="text-xs text-muted">
-                    Submitted on {req.requested_at ? new Date(req.requested_at).toLocaleString() : "Recently"}
-                    {req.reviewed_at && ` · Reviewed on ${new Date(req.reviewed_at).toLocaleDateString()}`}
+                    Submitted on {req.requested_at ? new Date(req.requested_at).toLocaleString(undefined, { timeZone: "Asia/Kolkata" }) : "Recently"}
+                    {req.reviewed_at && ` · Reviewed on ${new Date(req.reviewed_at).toLocaleDateString(undefined, { timeZone: "Asia/Kolkata" })}`}
                   </span>
                   {isDelete ? (
                     <p className="text-sm text-danger">
@@ -235,7 +235,7 @@ export function JdApprovalPanel({ requests = [], onResolved, isCompanyAdmin = tr
                 <span className="text-xs text-muted mt-1">
                   Requested by <strong>{req.requested_by_name || req.requested_by_email || "Team Member"}</strong>
                   {req.requested_by_email && ` (${req.requested_by_email})`} ·{" "}
-                  {req.requested_at ? new Date(req.requested_at).toLocaleString() : ""}
+                  {req.requested_at ? new Date(req.requested_at).toLocaleString(undefined, { timeZone: "Asia/Kolkata" }) : ""}
                 </span>
                 {isDelete ? (
                   <p className="text-sm text-danger mt-1">
@@ -358,7 +358,7 @@ function ReviewDetailModal({
               <span className="text-xs text-muted">
                 Requested by <strong>{request.requested_by_name || request.requested_by_email || "Team Member"}</strong>
                 {request.requested_by_email && ` (${request.requested_by_email})`} ·{" "}
-                {request.requested_at ? new Date(request.requested_at).toLocaleString() : ""}
+                {request.requested_at ? new Date(request.requested_at).toLocaleString(undefined, { timeZone: "Asia/Kolkata" }) : ""}
               </span>
             </div>
           </div>

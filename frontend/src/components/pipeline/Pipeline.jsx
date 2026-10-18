@@ -29,7 +29,9 @@ function toInputValue(deadline) {
 function formatLocal(deadline) {
   if (!deadline) return "";
   const date = new Date(deadline);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+  return Number.isNaN(date.getTime())
+    ? ""
+    : date.toLocaleString(undefined, { timeZone: "Asia/Kolkata" });
 }
 
 /**
@@ -37,12 +39,7 @@ function formatLocal(deadline) {
  * the next. Without this, a UTC-stored deadline looks shifted by hours.
  */
 function localTimeZoneLabel() {
-  const offset = -new Date().getTimezoneOffset();
-  const sign = offset >= 0 ? "+" : "-";
-  const abs = Math.abs(offset);
-  const hours = String(Math.floor(abs / 60)).padStart(2, "0");
-  const minutes = String(abs % 60).padStart(2, "0");
-  return `UTC${sign}${hours}:${minutes}`;
+  return "IST";
 }
 
 function deadlineStatus(deadline) {

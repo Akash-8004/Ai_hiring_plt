@@ -1,0 +1,82 @@
+INFO:     Started server process [20320]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+Failed to persist score for candidate akashofficial9918@gmail.com
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\LOCAL\AI_Hiring\backend\main.py", line 1739, in _workspace_payload
+    database.set_candidate_scoring(
+  File "C:\Users\Admin\Desktop\LOCAL\AI_Hiring\backend\storage\database.py", line 1509, in set_candidate_scoring
+    _candidates.update_one(
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\collection.py", line 1335, in update_one
+    self._update_retryable(
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\collection.py", line 1117, in _update_retryable
+    return self._database.client._retryable_write(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 2113, in _retryable_write
+    return self._retry_with_session(retryable, func, s, bulk, operation, operation_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 1986, in _retry_with_session
+    return self._retry_internal(
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\_csot.py", line 125, in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 2038, in _retry_internal
+    ).run()
+      ^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 2811, in run
+    res = self._read() if self._is_read else self._write()
+                                             ^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 3014, in _write
+    return self._func(self._session, conn, self._retryable)  # type: ignore
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\collection.py", line 1097, in _update
+    return self._update(
+           ^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\collection.py", line 1058, in _update
+    _check_write_command_response(result)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\helpers_shared.py", line 322, in _check_write_command_response
+    _raise_last_write_error(write_errors)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\helpers_shared.py", line 293, in _raise_last_write_error
+    raise WriteError(error.get("errmsg"), error.get("code"), error)
+pymongo.errors.WriteError: Updating the path 'scoring.score' would create a conflict at 'scoring', full error: {'index': 0, 'code': 40, 'errmsg': "Updating the path 'scoring.score' would create a conflict at 'scoring'"}
+Failed to persist score for candidate 123akash4007@sjcem.edu.in
+Traceback (most recent call last):
+  File "C:\Users\Admin\Desktop\LOCAL\AI_Hiring\backend\main.py", line 1739, in _workspace_payload
+    database.set_candidate_scoring(
+  File "C:\Users\Admin\Desktop\LOCAL\AI_Hiring\backend\storage\database.py", line 1509, in set_candidate_scoring
+    _candidates.update_one(
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\collection.py", line 1335, in update_one
+    self._update_retryable(
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\collection.py", line 1117, in _update_retryable
+    return self._database.client._retryable_write(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 2113, in _retryable_write
+    return self._retry_with_session(retryable, func, s, bulk, operation, operation_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 1986, in _retry_with_session
+    return self._retry_internal(
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\_csot.py", line 125, in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 2038, in _retry_internal
+    ).run()
+      ^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 2811, in run
+    res = self._read() if self._is_read else self._write()
+                                             ^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\mongo_client.py", line 3014, in _write
+    return self._func(self._session, conn, self._retryable)  # type: ignore
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\collection.py", line 1097, in _update
+    return self._update(
+           ^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\synchronous\collection.py", line 1058, in _update
+    _check_write_command_response(result)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\helpers_shared.py", line 322, in _check_write_command_response
+    _raise_last_write_error(write_errors)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\site-packages\pymongo\helpers_shared.py", line 293, in _raise_last_write_error
+    raise WriteError(error.get("errmsg"), error.get("code"), error)
+pymongo.errors.WriteError: Updating the path 'scoring.score' would create a conflict at 'scoring', full error: {'index': 0, 'code': 40, 'errmsg': "Updating the path 'scoring.score' would create a conflict at 'scoring'"}

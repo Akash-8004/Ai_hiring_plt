@@ -6,6 +6,7 @@ isolation between companies.
 
 from dataclasses import asdict
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import os
 import re
 from typing import Any
@@ -403,7 +404,9 @@ def permanent_delete_company(company_id: str) -> dict:
 
 def _month_period(dt: datetime | None = None) -> str:
     when = dt or datetime.now(timezone.utc)
-    return when.strftime("%Y-%m")
+    # Monthly credit resets roll over on the IST month (not UTC), so
+    # companies on IST get fresh credits at midnight on the 1st.
+    return when.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m")
 
 
 def _fresh_credits_bucket(allowance: int, period: str | None = None) -> dict:
@@ -1604,6 +1607,7 @@ def append_transcript_turn(
     extra: dict | None = None,
     company_id: str | None = None,
     job_id: str | None = None,
+    interview_type: str | None = None,
 ) -> None:
     content = (text or "").strip()
     if not content:
@@ -1613,6 +1617,8 @@ def append_transcript_turn(
         "content": content,
         "at": datetime.now(timezone.utc).isoformat(),
     }
+    if interview_type:
+        turn["interview"] = interview_type
     if extra:
         turn.update(extra)
     _candidates.update_one(

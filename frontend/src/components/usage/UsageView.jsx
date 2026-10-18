@@ -199,7 +199,7 @@ export function UsageView() {
                 entries.map((entry) => (
                   <tr key={entry._id || `${entry.created_at}-${entry.candidate_email}`}>
                     <td className="text-xs text-muted">
-                      {entry.created_at ? new Date(entry.created_at).toLocaleString() : "—"}
+                      {entry.created_at ? new Date(entry.created_at).toLocaleString(undefined, { timeZone: "Asia/Kolkata" }) : "—"}
                     </td>
                     <td className="font-mono text-sm">{entry.candidate_email || "—"}</td>
                     <td>

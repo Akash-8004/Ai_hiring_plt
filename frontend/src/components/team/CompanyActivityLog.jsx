@@ -55,7 +55,7 @@ export function CompanyActivityLog() {
     if (!ts) return "-";
     try {
       return new Date(ts).toLocaleString(undefined, {
-        timeZone: "UTC",
+        timeZone: "Asia/Kolkata",
         month: "short",
         day: "numeric",
         hour: "2-digit",

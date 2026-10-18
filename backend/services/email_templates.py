@@ -9,13 +9,20 @@ Plain-text bodies use raw values (no HTML context).
 """
 
 
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from backend.core.sanitizer import html_escape as _esc
 
+IST = ZoneInfo("Asia/Kolkata")
+
 
 def _format_deadline(deadline: str | None) -> str:
-    """Format an ISO 8601 deadline for display in the invitation email."""
+    """Format an ISO 8601 deadline for display in the invitation email.
+
+    Deadlines are stored in UTC; they are converted to IST (Asia/Kolkata)
+    before formatting so candidates always see Indian Standard Time.
+    """
     if not deadline:
         return ""
     try:
@@ -23,9 +30,8 @@ def _format_deadline(deadline: str | None) -> str:
     except (TypeError, ValueError):
         return str(deadline)
     if dt.tzinfo is None:
-        local_now = datetime.now()
-        return local_now.strftime("%B %d, %Y") + " " + dt.strftime("%I:%M %p")
-    return dt.strftime("%B %d, %Y at %I:%M %p %Z")
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(IST).strftime("%B %d, %Y at %I:%M %p IST")
 
 
 def interview_invite_email(

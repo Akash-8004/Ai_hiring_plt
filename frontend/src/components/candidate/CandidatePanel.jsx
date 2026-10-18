@@ -1,10 +1,30 @@
 import React, { useState } from "react";
 import { XCircle, Video, Play, X } from "lucide-react";
 import { StatusBadge } from "../common/StatusBadge";
-import { CopyButton } from "../common/CopyButton";
 import { pipelineStatus } from "../../utils/pipelineStatus";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
+
+function TranscriptBox({ turns }) {
+  if (!turns?.length) return null;
+  return (
+    <div className="transcript-box">
+      {turns.map((turn, index) => (
+        <p key={index} className={turn.role === "candidate" ? "transcript-candidate" : ""}>
+          <strong>
+            {turn.type === "written"
+              ? "Candidate (written):"
+              : turn.role === "candidate"
+                ? "Candidate:"
+                : "AI Interviewer:"}
+          </strong>{" "}
+          {turn.content}
+          {turn.question ? <span className="transcript-question"> — {turn.question}</span> : null}
+        </p>
+      ))}
+    </div>
+  );
+}
 
 export function CandidatePanel({ candidate, onClose }) {
   const hrInvitation = candidate.hr_invitation;
@@ -89,12 +109,7 @@ export function CandidatePanel({ candidate, onClose }) {
       {/* HR Interview Section (first — HR comes before Technical) */}
       <section>
         <h3>HR Interview</h3>
-        {hrInvitation?.link ? (
-          <div className="invite-link-row">
-            <span className="invite-link">{hrInvitation.link.replace(/^https?:\/\//, "")}</span>
-            <CopyButton text={hrInvitation.link} />
-          </div>
-        ) : (
+        {!hrInvitation?.link && (
           <p className="muted-cell">No HR interview invitation yet.</p>
         )}
         {hrInterview.status === "completed" ? (
@@ -139,17 +154,18 @@ export function CandidatePanel({ candidate, onClose }) {
             <Play size={15} /> Watch Recording
           </button>
         ) : null}
+        {candidate.hr_transcript?.length ? (
+          <div className="panel-transcript">
+            <h4>HR Interview Transcript</h4>
+            <TranscriptBox turns={candidate.hr_transcript} />
+          </div>
+        ) : null}
       </section>
 
       {/* Technical Interview Section */}
       <section>
         <h3>Technical Interview</h3>
-        {invitation?.link ? (
-          <div className="invite-link-row">
-            <span className="invite-link">{invitation.link.replace(/^https?:\/\//, "")}</span>
-            <CopyButton text={invitation.link} />
-          </div>
-        ) : (
+        {!invitation?.link && (
           <p className="muted-cell">No technical interview invitation yet.</p>
         )}
         {techInterview.status === "completed" ? (
@@ -182,29 +198,13 @@ export function CandidatePanel({ candidate, onClose }) {
             <Play size={15} /> Watch Recording
           </button>
         ) : null}
-      </section>
-
-      {/* Interview Transcript */}
-      {candidate.interview_transcript?.length ? (
-        <section>
-          <h3>Interview Transcript</h3>
-          <div className="transcript-box">
-            {candidate.interview_transcript.map((turn, index) => (
-              <p key={index} className={turn.role === "candidate" ? "transcript-candidate" : ""}>
-                <strong>
-                  {turn.type === "written"
-                    ? "Candidate (written):"
-                    : turn.role === "candidate"
-                      ? "Candidate:"
-                      : "AI Interviewer:"}
-                </strong>{" "}
-                {turn.content}
-                {turn.question ? <span className="transcript-question"> — {turn.question}</span> : null}
-              </p>
-            ))}
+        {candidate.technical_transcript?.length ? (
+          <div className="panel-transcript">
+            <h4>Technical Interview Transcript</h4>
+            <TranscriptBox turns={candidate.technical_transcript} />
           </div>
-        </section>
-      ) : null}
+        ) : null}
+      </section>
 
       {/* Video Playback Modal */}
       {videoModal && (

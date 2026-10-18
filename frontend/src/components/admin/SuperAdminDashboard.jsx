@@ -703,7 +703,7 @@ export function SuperAdminDashboard() {
                           </span>
                         </td>
                         <td className="text-muted text-xs">
-                          {comp.created_at ? new Date(comp.created_at).toLocaleDateString(undefined, { timeZone: "UTC" }) : "-"}
+                          {comp.created_at ? new Date(comp.created_at).toLocaleDateString(undefined, { timeZone: "Asia/Kolkata" }) : "-"}
                         </td>
                         <td>
                           <div className="flex-row gap-2">
@@ -1043,7 +1043,7 @@ export function SuperAdminDashboard() {
                                         {(companyUsage.usage?.entries || []).map((entry) => (
                                           <tr key={entry._id || entry.created_at}>
                                             <td className="text-xs text-muted">
-                                              {entry.created_at ? new Date(entry.created_at).toLocaleString() : "—"}
+                                              {entry.created_at ? new Date(entry.created_at).toLocaleString(undefined, { timeZone: "Asia/Kolkata" }) : "—"}
                                             </td>
                                             <td className="font-mono text-xs">{entry.candidate_email || "—"}</td>
                                             <td>{entry.round_type}</td>
@@ -1098,7 +1098,7 @@ export function SuperAdminDashboard() {
                                               {drive.active && <span className="badge badge-subtle ml-2">Active</span>}
                                               <p className="text-xs text-muted">
                                                 {drive.department} · {drive.location} · {drive.experience_years}+ yrs
-                                                {drive.created_at ? ` · ${new Date(drive.created_at).toLocaleDateString()}` : ""}
+                                                {drive.created_at ? ` · ${new Date(drive.created_at).toLocaleDateString(undefined, { timeZone: "Asia/Kolkata" })}` : ""}
                                               </p>
                                             </div>
                                             <button
@@ -1164,7 +1164,7 @@ export function SuperAdminDashboard() {
                                             </span>
                                           </td>
                                           <td className="text-xs text-muted">
-                                            {su.last_login ? new Date(su.last_login).toLocaleString(undefined, { timeZone: "UTC" }) : "Never"}
+                                            {su.last_login ? new Date(su.last_login).toLocaleString(undefined, { timeZone: "Asia/Kolkata" }) : "Never"}
                                           </td>
                                           <td>
                                             {su.role === "super_admin" ? (
@@ -1438,7 +1438,7 @@ export function SuperAdminDashboard() {
                         </td>
                         <td>{u.login_count || 0}</td>
                         <td className="text-xs text-muted">
-                          {u.last_login ? new Date(u.last_login).toLocaleString(undefined, { timeZone: "UTC" }) : "Never"}
+                          {u.last_login ? new Date(u.last_login).toLocaleString(undefined, { timeZone: "Asia/Kolkata" }) : "Never"}
                         </td>
                         <td>
                           {u.role !== "super_admin" && (

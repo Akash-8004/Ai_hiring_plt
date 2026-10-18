@@ -12,7 +12,7 @@ function expiryLabel(invitation, onAmend, canInvite, busy) {
   return (
     <div className="invite-expiry-wrap" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
       <small className={isExpired ? "deadline-expired" : "invite-expiry"}>
-        Expires: {date.toLocaleString()}
+        Expires: {date.toLocaleString(undefined, { timeZone: "Asia/Kolkata" })} IST
         {isCustom ? " (Private window)" : ""}
       </small>
       {!isExpired && canInvite && onAmend ? (
