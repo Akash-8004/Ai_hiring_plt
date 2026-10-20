@@ -18,6 +18,7 @@ from backend.auth.models import (
     CreateSubUserRequest,
     ResetUserPasswordRequest,
     SendCredentialsRequest,
+    SendTeamCredentialsRequest,
     UpdateCompanyRequest,
     UpdatePlanPricingRequest,
     UpdateSubUserPermissionsRequest,
@@ -41,6 +42,8 @@ from backend.services.email_templates import (
     company_details_email,
     credential_delivery_email,
     credits_adjusted_email,
+    password_changed_notification_email,
+    team_member_credentials_email,
 )
 
 admin_router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -543,7 +546,13 @@ def reset_user_password(
     user: dict = Depends(require_super_admin),
     request: Request = None,
 ):
-    """Super Admin resets a user's password without knowing the current one."""
+    """Super Admin resets a user's password without knowing the current one.
+
+    Also invalidates every active session for the target (outstanding JWTs
+    die instantly through the session-fingerprint check), consumes any
+    pending self-service reset token, and emails the user a security
+    notification so an out-of-band reset is never silent.
+    """
     target = database.get_user_by_id(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
@@ -552,6 +561,10 @@ def reset_user_password(
 
     new_hash = hash_password(body.new_password)
     database.update_user_password(user_id, new_hash)
+    # Invalidate all sessions so the user must log in again with the new password.
+    database.update_user_session(user_id, refresh_token=None)
+    # Consume any pending self-service reset token — superseded by this reset.
+    database.clear_user_password_reset_token(user_id)
 
     log_activity(
         action="user.password_reset",
@@ -565,7 +578,34 @@ def reset_user_password(
         request=request,
     )
 
-    return {"ok": True}
+    # Best-effort security notification — never fails the reset itself.
+    email_sent = False
+    email_error = None
+    try:
+        portal_url = f"{frontend_base_url()}/login"
+        subject, html_body, plain_body = password_changed_notification_email(
+            user_name=target.get("full_name", "") or target.get("email", ""),
+            change_type="A platform administrator reset your password",
+            portal_url=portal_url,
+        )
+        result = email_service.send_email(
+            target["email"], subject, html_body, plain_body,
+        )
+        email_sent = result.get("ok", False)
+        email_error = result.get("error")
+        email_service.log_email_send(
+            to_email=target["email"],
+            subject=subject,
+            email_type="password_changed_notification",
+            status="sent" if email_sent else "failed",
+            error_message=email_error,
+            metadata={"change_type": "admin_reset", "reset_by": user.get("email", "")},
+            sent_by=user.get("email", "system"),
+        )
+    except Exception as exc:
+        email_error = str(exc)
+
+    return {"ok": True, "email_sent": email_sent, "email_error": email_error}
 
 
 @admin_router.put("/users/{user_id}")
@@ -632,10 +672,12 @@ def admin_company_usage(
     credits = database.get_company_credits(company_id)
     prices = database.get_plan_prices()
     usage = database.get_usage_log(company_id, page, limit, round_type)
+    interview_usage = database.get_interview_usage(company_id, page, limit, round_type)
     return {
         "credits": credits,
         "plan_price": prices.get(company.get("plan", "starter")),
         "usage": usage,
+        "interview_usage": interview_usage,
     }
 
 
@@ -1000,11 +1042,139 @@ def create_sub_user(
         request=request,
     )
 
+    # Auto-email credentials to the new team member (same pattern as
+    # create_company's credential_delivery flow). Best-effort: creation
+    # succeeds even if email delivery fails.
+    email_auto_sent = False
+    email_auto_error = None
+    if body.auto_send_email:
+        try:
+            portal_url = f"{frontend_base_url()}/login"
+            subject, html_body, plain_body = team_member_credentials_email(
+                company_name=company.get("name", ""),
+                member_name=body.full_name,
+                member_email=body.email,
+                password=body.password,
+                permissions=body.permissions,
+                portal_url=portal_url,
+                invited_by=user.get("full_name", "") or user.get("email", ""),
+            )
+            result = email_service.send_email(body.email, subject, html_body, plain_body)
+            email_auto_sent = result.get("ok", False)
+            email_auto_error = result.get("error")
+            email_service.log_email_send(
+                to_email=body.email,
+                subject=subject,
+                email_type="team_member_credentials",
+                status="sent" if email_auto_sent else "failed",
+                error_message=email_auto_error,
+                metadata={"company_id": company_id, "user_id": str(new_id), "auto": True},
+                sent_by=user.get("email", "system"),
+            )
+        except Exception as exc:
+            email_auto_error = str(exc)
+
     return {
         "ok": True,
         "user_id": str(new_id),
         "email": body.email,
-        "message": f"User created. Share credentials with {body.email}",
+        "email_auto_sent": email_auto_sent,
+        "email_auto_error": email_auto_error,
+        "message": (
+            f"User created. Credentials emailed to {body.email}."
+            if email_auto_sent
+            else f"User created. Share credentials with {body.email}"
+        ),
+    }
+
+
+@company_router.post("/team/{user_id}/send-credentials")
+def resend_team_member_credentials(
+    user_id: str,
+    body: SendTeamCredentialsRequest,
+    user: dict = Depends(require_company_admin),
+    request: Request = None,
+):
+    """Resend a team member's credentials email (company admin only).
+
+    Mirrors the super-admin ``/api/admin/companies/{id}/send-credentials``
+    flow: the plaintext password is supplied by the caller (never stored
+    server-side), and a 60-second server-side dedup prevents spam.
+    """
+    target = database.get_user_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if str(target.get("company_id", "")) != str(user.get("company_id", "")):
+        raise HTTPException(status_code=403, detail="Cannot manage users from another company")
+    if target["role"] != "sub_user":
+        raise HTTPException(status_code=400, detail="Can only resend credentials for sub-users")
+    if target.get("status") != "active":
+        raise HTTPException(status_code=400, detail="Cannot send credentials to a suspended user")
+
+    company_id = str(user.get("company_id", ""))
+    company = database.get_company_by_id(company_id)
+
+    # BUG 21 pattern: server-side dedup — skip if sent in the last 60 seconds
+    recent = database.find_recent_email_log(
+        to_email=body.email,
+        email_type="team_member_credentials",
+        company_id=company_id,
+        seconds=60,
+    )
+    if recent:
+        return {
+            "ok": True,
+            "email_auto_sent": True,
+            "message": "Credentials already sent recently",
+        }
+
+    portal_url = f"{frontend_base_url()}/login"
+    subject, html_body, plain_body = team_member_credentials_email(
+        company_name=company.get("name", "") if company else "",
+        member_name=target.get("full_name", ""),
+        member_email=body.email,
+        password=body.password,
+        permissions=target.get("permissions", []) or [],
+        portal_url=portal_url,
+        invited_by=user.get("full_name", "") or user.get("email", ""),
+    )
+
+    result = email_service.send_email(body.email, subject, html_body, plain_body)
+    email_ok = result.get("ok", False)
+    email_error = result.get("error")
+
+    email_service.log_email_send(
+        to_email=body.email,
+        subject=subject,
+        email_type="team_member_credentials",
+        status="sent" if email_ok else "failed",
+        error_message=email_error,
+        metadata={"company_id": company_id, "user_id": user_id, "auto": False, "resend": True},
+        sent_by=user.get("email", "system"),
+    )
+
+    log_activity(
+        action="user.credentials_resent",
+        category="user_mgmt",
+        actor=user,
+        target_type="user",
+        target_id=user_id,
+        target_label=f"{target.get('full_name', '')} ({body.email})",
+        metadata={"email_sent": email_ok, "email_error": email_error},
+        request=request,
+    )
+
+    if not email_ok:
+        return {
+            "ok": False,
+            "email_auto_sent": False,
+            "email_auto_error": email_error,
+            "message": f"Email failed: {email_error}",
+        }
+    return {
+        "ok": True,
+        "email_auto_sent": True,
+        "message": f"Credentials sent to {body.email}",
     }
 
 
@@ -1099,10 +1269,12 @@ def _company_usage_response(company_id: str, page: int, limit: int, round_type: 
     credits = database.get_company_credits(company_id)
     prices = database.get_plan_prices()
     usage = database.get_usage_log(company_id, page, limit, round_type)
+    interview_usage = database.get_interview_usage(company_id, page, limit, round_type)
     return {
         "credits": credits,
         "plan_price": prices.get(company.get("plan", "starter")),
         "usage": usage,
+        "interview_usage": interview_usage,
     }
 
 

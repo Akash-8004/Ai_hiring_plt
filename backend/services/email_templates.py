@@ -164,6 +164,185 @@ def credential_delivery_email(
     return subject, html_body, plain_body
 
 
+def team_member_credentials_email(
+    company_name: str,
+    member_name: str,
+    member_email: str,
+    password: str,
+    permissions: list[str],
+    portal_url: str,
+    invited_by: str = "",
+) -> tuple[str, str, str]:
+    """Build a credentials delivery email for a newly added team member.
+
+    .. deprecated::
+        Same security concern as ``credential_delivery_email`` (Issue #20, item 4):
+        the plaintext password is sent over email. Callers should plan to migrate
+        to a one-time setup-token flow.
+
+    Sent by a company admin via ``POST /api/company/team``
+    (see ``backend/admin/routes.py`` ``create_sub_user``).
+    """
+    subject = f"You've been added to {company_name} on AI Hiring Platform"
+
+    permissions_label = ", ".join(permissions) if permissions else "None"
+    invited_by_line = (
+        f"\nInvited by  : {invited_by}\n" if invited_by else "\n"
+    )
+
+    plain_body = (
+        f"Hello {member_name},\n\n"
+        f"You've been added as a team member of \"{company_name}\" "
+        f"on the AI Hiring Platform. Below are your login credentials:\n\n"
+        f"Login Email : {member_email}\n"
+        f"Password    : {password}\n"
+        f"Permissions : {permissions_label}\n"
+        f"Portal URL  : {portal_url}\n"
+        f"{invited_by_line}"
+        f"IMPORTANT: Please change your password after your first login.\n\n"
+        f"— AI Hiring Platform"
+    )
+
+    # BUG 28: escape user-controlled values for HTML context
+    _company_name = _esc(company_name)
+    _member_name = _esc(member_name)
+    _member_email = _esc(member_email)
+    _password = _esc(password)
+    _permissions_label = _esc(permissions_label)
+    _invited_by = _esc(invited_by)
+
+    _invited_by_html = (
+        f'<tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Invited by</td>'
+        f'<td style="padding: 10px 16px;">{_invited_by}</td></tr>'
+        if invited_by
+        else ""
+    )
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; line-height: 1.6; max-width: 560px; margin: 0 auto; padding: 24px;">
+  <h2 style="margin-top: 0; color: #0f172a;">Welcome to {_company_name}</h2>
+  <p>Hello <strong>{_member_name}</strong>,</p>
+  <p>You've been added as a team member of <strong>{_company_name}</strong> on the AI Hiring Platform.</p>
+  <p>Here are your login credentials:</p>
+  <table style="border-collapse: collapse; width: 100%; margin: 16px 0; background: #f8fafc; border-radius: 8px;">
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Login Email</td><td style="padding: 10px 16px; font-family: monospace;">{_member_email}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Password</td><td style="padding: 10px 16px; font-family: monospace;">{_password}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Permissions</td><td style="padding: 10px 16px;">{_permissions_label}</td></tr>
+    {_invited_by_html}
+  </table>
+  <p style="margin: 20px 0;">
+    <a href="{portal_url}" style="display: inline-block; padding: 10px 24px; background: #6366f1; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Go to Login Portal</a>
+  </p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+  <p style="font-size: 13px; color: #ef4444; font-weight: 600;">⚠ Security Notice</p>
+  <p style="font-size: 13px; color: #64748b;">Please change your password immediately after your first login.</p>
+</body>
+</html>"""
+
+    return subject, html_body, plain_body
+
+
+def password_reset_email(
+    user_name: str,
+    reset_url: str,
+    expires_minutes: int = 30,
+) -> tuple[str, str, str]:
+    """Build a self-service password reset link email.
+
+    Contains no plaintext password — the recipient sets their own via the
+    one-time, time-limited link. Sent by ``POST /api/auth/forgot-password``
+    (see ``backend/auth/routes.py``).
+    """
+    subject = "Reset Your AI Hiring Platform Password"
+
+    plain_body = (
+        f"Hello {user_name},\n\n"
+        f"We received a request to reset the password for your account.\n\n"
+        f"Reset your password using this link (valid for {expires_minutes} minutes):\n"
+        f"{reset_url}\n\n"
+        f"IMPORTANT: This link is single-use and expires in {expires_minutes} minutes. "
+        f"If you did not request a password reset, you can safely ignore this email — "
+        f"your password has not changed.\n\n"
+        f"— AI Hiring Platform"
+    )
+
+    # BUG 28: escape user-controlled values for HTML context
+    _user_name = _esc(user_name)
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; line-height: 1.6; max-width: 560px; margin: 0 auto; padding: 24px;">
+  <h2 style="margin-top: 0; color: #0f172a;">Reset Your Password</h2>
+  <p>Hello <strong>{_user_name}</strong>,</p>
+  <p>We received a request to reset the password for your AI Hiring Platform account.</p>
+  <p style="margin: 20px 0;">
+    <a href="{reset_url}" style="display: inline-block; padding: 10px 24px; background: #6366f1; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Reset Password</a>
+  </p>
+  <p style="font-size: 13px; color: #64748b;">Or copy this URL: <a href="{reset_url}" style="color: #6366f1;">{reset_url}</a></p>
+  <p style="font-size: 13px; color: #64748b;">This link is single-use and expires in <strong>{expires_minutes} minutes</strong>.</p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+  <p style="font-size: 12px; color: #94a3b8;">If you did not request a password reset, you can safely ignore this email — your password has not changed.</p>
+</body>
+</html>"""
+
+    return subject, html_body, plain_body
+
+
+def password_changed_notification_email(
+    user_name: str,
+    change_type: str,
+    portal_url: str,
+) -> tuple[str, str, str]:
+    """Build a security notification for any password change.
+
+    ``change_type`` describes how the change happened, e.g.:
+    - "You changed your own password"
+    - "You reset your password using the recovery link"
+    - "A platform administrator reset your password"
+    """
+    subject = "Your AI Hiring Platform Password Was Changed"
+
+    plain_body = (
+        f"Hello {user_name},\n\n"
+        f"This is a security confirmation: {change_type}.\n\n"
+        f"If this was you, no further action is needed.\n"
+        f"If you did NOT make this change, please contact your organization "
+        f"administrator or platform administrator immediately and change your "
+        f"password.\n\n"
+        f"Login Portal: {portal_url}\n\n"
+        f"— AI Hiring Platform"
+    )
+
+    # BUG 28: escape user-controlled values for HTML context
+    _user_name = _esc(user_name)
+    _change_type = _esc(change_type)
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; line-height: 1.6; max-width: 560px; margin: 0 auto; padding: 24px;">
+  <h2 style="margin-top: 0; color: #0f172a;">Password Changed</h2>
+  <p>Hello <strong>{_user_name}</strong>,</p>
+  <p>This is a security confirmation: <strong>{_change_type}</strong>.</p>
+  <p>If this was you, no further action is needed.</p>
+  <p style="margin: 20px 0;">
+    <a href="{portal_url}" style="display: inline-block; padding: 10px 24px; background: #6366f1; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Go to Login Portal</a>
+  </p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+  <p style="font-size: 13px; color: #ef4444; font-weight: 600;">Didn't change your password?</p>
+  <p style="font-size: 13px; color: #64748b;">Contact your organization administrator or platform administrator immediately.</p>
+</body>
+</html>"""
+
+    return subject, html_body, plain_body
+
+
 def credits_adjusted_email(
     company_name: str,
     admin_email: str,

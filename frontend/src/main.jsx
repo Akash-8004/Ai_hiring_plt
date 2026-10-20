@@ -5,6 +5,8 @@ import "./styles.css";
 
 import { AuthProvider } from "./components/auth/AuthProvider";
 import { LoginPage } from "./components/auth/LoginPage";
+import { ForgotPasswordPage } from "./components/auth/ForgotPasswordPage";
+import { ResetPasswordPage } from "./components/auth/ResetPasswordPage";
 import { SuperAdminDashboard } from "./components/admin/SuperAdminDashboard";
 import { TeamManagementView } from "./components/team/TeamManagementView";
 import { Sidebar } from "./components/layout/Sidebar";
@@ -497,6 +499,21 @@ function LoginRoute() {
   return <LoginPage />;
 }
 
+function ForgotPasswordRoute() {
+  const { isAuthenticated, loading } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!loading && isAuthenticated) {
+      navigate("/app", { replace: true });
+    }
+  }, [isAuthenticated, loading, navigate]);
+
+  if (loading) return <LoadingScreen />;
+  if (isAuthenticated) return null;
+  return <ForgotPasswordPage />;
+}
+
 function ProtectedApp() {
   const { isAuthenticated, loading, role } = useAuth();
 
@@ -531,6 +548,8 @@ function AppRouter() {
       <Route path="/terms" element={<TermsPage />} />
       <Route path="/contact" element={<Navigate to="/book-a-demo" replace />} />
       <Route path="/login" element={<LoginRoute />} />
+      <Route path="/forgot-password" element={<ForgotPasswordRoute />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/app/*" element={<ProtectedApp />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

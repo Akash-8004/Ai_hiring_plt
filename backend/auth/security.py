@@ -31,6 +31,10 @@ _login_attempts: dict[str, list[float]] = {}
 LOGIN_RATE_LIMIT = 5         # max attempts
 LOGIN_RATE_WINDOW = 60.0     # per 60 seconds
 
+_forgot_attempts: dict[str, list[float]] = {}
+FORGOT_RATE_LIMIT = 3        # max requests
+FORGOT_RATE_WINDOW = 300.0   # per 5 minutes
+
 _lead_attempts: dict[str, list[float]] = {}
 LEAD_RATE_LIMIT = int(os.getenv("LEAD_RATE_LIMIT", "5"))               # max submissions
 LEAD_RATE_WINDOW = float(os.getenv("LEAD_RATE_WINDOW_SECONDS", "60"))  # per window
@@ -66,6 +70,17 @@ def check_login_rate_limit(ip: str) -> None:
         LOGIN_RATE_LIMIT,
         LOGIN_RATE_WINDOW,
         "Too many login attempts. Please try again later.",
+    )
+
+
+def check_forgot_password_rate_limit(ip: str) -> None:
+    """Raise 429 if the IP has exceeded the forgot-password rate limit."""
+    _check_rate_limit(
+        _forgot_attempts,
+        ip,
+        FORGOT_RATE_LIMIT,
+        FORGOT_RATE_WINDOW,
+        "Too many password reset requests. Please try again later.",
     )
 
 
@@ -129,6 +144,23 @@ def decode_token(token: str) -> dict[str, Any]:
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+# ── Password-Reset Token Utilities ──────────────────────────────────────────
+
+def generate_password_reset_token() -> tuple[str, str]:
+    """Generate a one-time password-reset token.
+
+    Returns ``(raw_token, token_hash)``. The raw token goes into the emailed
+    link; only the SHA-256 hash is persisted, so a database leak cannot be
+    replayed into account takeover. Tokens are high-entropy
+    (``secrets.token_urlsafe(32)`` ≈ 256 bits), which makes a plain SHA-256
+    commitment safe — the preimage resistance argument that applies to
+    low-entropy passwords (bcrypt territory) does not apply here.
+    """
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    return raw_token, token_hash
 
 
 # ── Authorization error codes ───────────────────────────────────────────────

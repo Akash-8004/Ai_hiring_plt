@@ -61,9 +61,16 @@ export function UsageView() {
   const lowBalance = !loading && pool > 0 && remaining < pool * 0.2;
   const exhausted = !loading && remaining <= 0;
 
-  const total = usageData?.usage?.total || 0;
+  const total = usageData?.interview_usage?.total ?? usageData?.usage?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / limit));
-  const entries = usageData?.usage?.entries || [];
+  const entries = usageData?.interview_usage?.entries || [];
+
+  const formatDuration = (seconds) => {
+    const s = Number(seconds) || 0;
+    const mins = Math.floor(s / 60);
+    const secs = Math.round(s % 60);
+    return `${mins}m ${String(secs).padStart(2, "0")}s`;
+  };
 
   return (
     <div className="usage-view">
@@ -162,28 +169,33 @@ export function UsageView() {
           <h3 className="card-title">How credits work</h3>
         </div>
         <p className="text-sm text-muted mt-2">
-          1 credit = 1 interview minute. Both HR and Technical rounds consume credits based on each job&apos;s configured duration.
-          Credits reset monthly with no rollover — unused credits do not carry over to the next period.
+          1 credit = 10 minutes of interview time. Credits are calculated from each candidate&apos;s
+          <strong> actual interview duration</strong> (start to end) and accumulated across all candidates in your
+          company within the billing period. Every full 10 minutes consumes 1 credit and the leftover seconds carry
+          forward to the next interview — so no interview time is ever wasted. Credits reset monthly with no rollover.
         </p>
       </div>
 
       <div className="card mt-4">
         <div className="card-header-flex">
-          <h3 className="card-title">Usage Log</h3>
+          <h3 className="card-title">Interview Durations</h3>
           <button className="btn btn-secondary btn-sm" onClick={fetchAll} disabled={loading}>
             <RefreshCw size={14} className={loading ? "spin" : ""} /> Refresh
           </button>
         </div>
+        <p className="text-xs text-muted mt-1">
+          Actual time taken by each candidate from interview start to completion. Credits are consumed in 10-minute blocks across all candidates.
+        </p>
         <div className="table-responsive mt-3">
           <table className="data-table">
             <thead>
               <tr>
-                <th>Timestamp</th>
+                <th>Completed At</th>
                 <th>Candidate</th>
                 <th>Round</th>
-                <th>Minutes</th>
-                <th>Action</th>
-                <th>Detail</th>
+                <th>Duration</th>
+                <th>Credits Used</th>
+                <th>Carry Forward</th>
               </tr>
             </thead>
             <tbody>
@@ -193,25 +205,23 @@ export function UsageView() {
                 </tr>
               ) : entries.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="text-center py-8 text-muted">No usage entries yet.</td>
+                  <td colSpan={6} className="text-center py-8 text-muted">No completed interviews yet.</td>
                 </tr>
               ) : (
                 entries.map((entry) => (
-                  <tr key={entry._id || `${entry.created_at}-${entry.candidate_email}`}>
+                  <tr key={entry._id || entry.event_id || `${entry.created_at}-${entry.candidate_email}`}>
                     <td className="text-xs text-muted">
-                      {entry.created_at ? new Date(entry.created_at).toLocaleString(undefined, { timeZone: "Asia/Kolkata" }) : "—"}
+                      {entry.ended_at || entry.created_at
+                        ? new Date(entry.ended_at || entry.created_at).toLocaleString(undefined, { timeZone: "Asia/Kolkata" })
+                        : "—"}
                     </td>
                     <td className="font-mono text-sm">{entry.candidate_email || "—"}</td>
                     <td>
-                      <span className="badge badge-subtle">{entry.round_type || "—"}</span>
+                      <span className="badge badge-subtle">{entry.interview_type || "—"}</span>
                     </td>
-                    <td>{entry.minutes ?? 0}</td>
-                    <td>
-                      <span className={`badge ${entry.action === "blocked" ? "badge-critical" : "badge-subtle"}`}>
-                        {entry.action}
-                      </span>
-                    </td>
-                    <td className="text-xs text-muted">{entry.detail || "—"}</td>
+                    <td>{formatDuration(entry.duration_seconds)}</td>
+                    <td>{entry.credits_consumed ?? 0}</td>
+                    <td className="text-xs text-muted">{formatDuration(entry.new_remainder_seconds)}</td>
                   </tr>
                 ))
               )}

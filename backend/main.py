@@ -1957,10 +1957,34 @@ def _sanitized_questions(custom_questions: list[dict]) -> list[dict]:
     return result
 
 
+def _actual_interview_seconds(started_at, ended_at) -> int:
+    """Wall-clock seconds between interview start and end.
+
+    Returns 0 when the start timestamp is missing or invalid so an unknown
+    duration never inflates credit usage.
+    """
+    if not started_at:
+        return 0
+    if isinstance(started_at, str):
+        try:
+            started_at = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        except Exception:
+            return 0
+    if not isinstance(started_at, datetime):
+        return 0
+    if not isinstance(ended_at, datetime):
+        return 0
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    if ended_at.tzinfo is None:
+        ended_at = ended_at.replace(tzinfo=timezone.utc)
+    delta = (ended_at - started_at).total_seconds()
+    return max(0, int(delta))
+
+
 def _run_interview_evaluation(
-    email: str, resume: ParsedResume, interview_type: str, transcript: list[dict],
-    current_job: JobDescription | None = None, company_id: str | None = None,
-    job_id: str | None = None,
+    email: str, resume, interview_type: str, transcript: list[dict],
+    current_job: JobDescription | None = None, company_id: str | None = None, job_id: str | None = None,
 ) -> dict[str, Any]:
     """Score an interview transcript and persist the result + pipeline stage."""
     job = current_job or DEFAULT_JOB
@@ -1979,35 +2003,6 @@ def _run_interview_evaluation(
     if existing_interview.get("status") == "completed":
         existing_eval = existing_interview.get("evaluation") or {}
         return {"email": email, "interview_type": interview_type, **existing_eval}
-
-    if company_id:
-        consume_result = database.consume_credits(str(company_id), minutes)
-        credits_bucket = database.get_company_credits(str(company_id))
-        if not consume_result.get("ok"):
-            database.log_usage(
-                email, str(company_id),
-                minutes=minutes, round_type=round_type, action="blocked",
-                detail=f"Required {minutes} credits, had {consume_result.get('remaining', 0)}",
-            )
-            log_activity(
-                action="credits.insufficient",
-                category="credits",
-                actor={"_id": "system", "email": "system", "role": "system", "company_id": company_id},
-                target_type="company",
-                target_id=str(company_id),
-                target_label=email,
-                metadata={"required": minutes, "remaining": consume_result.get("remaining", 0)},
-                severity="critical",
-            )
-            return {
-                "blocked": True,
-                "credits": credits_bucket,
-                "required": minutes,
-                "message": (
-                    f"Insufficient interview credits. This {round_type} round requires "
-                    f"{minutes} credits but only {consume_result.get('remaining', 0)} remain."
-                ),
-            }
 
     if interview_type == "technical":
         result = technical_evaluator.evaluate(resume.raw_text, transcript)
@@ -2029,14 +2024,22 @@ def _run_interview_evaluation(
     ) or {}
     recording = existing_interview.get("recording")
 
+    started_at = existing_interview.get("started_at")
+    ended_at = datetime.now(timezone.utc)
+    actual_seconds = _actual_interview_seconds(started_at, ended_at)
+
     interview = {
         "status": "completed",
         "type": interview_type,
         "decision": str(result.get("decision", "FAIL")).upper(),
         "score": result.get("final_round_score", 0),
-        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": ended_at.isoformat(),
         "evaluation": result,
     }
+    if started_at:
+        interview["started_at"] = started_at
+    if actual_seconds:
+        interview["duration_seconds"] = actual_seconds
     if recording:
         interview["recording"] = recording
 
@@ -2046,10 +2049,20 @@ def _run_interview_evaluation(
         database.set_candidate_hr_interview(email, interview, company_id, job_id)
 
     if company_id:
-        database.log_usage(
-            email, str(company_id),
-            minutes=minutes, round_type=round_type, action="consume",
-            detail=f"{round_type} interview evaluation",
+        # Cumulative usage: credits are debited on 10-minute (600s) blocks of the
+        # candidate's ACTUAL interview duration, accumulated across all candidates
+        # of the company within the billing period. The leftover seconds are
+        # carried forward to the next completed interview.
+        event_id = f"{company_id}:{job_id or ''}:{email}:{interview_type}:{started_at or ''}"
+        usage_result = database.record_interview_usage(
+            company_id=str(company_id),
+            candidate_email=email,
+            interview_type=round_type,
+            event_id=event_id,
+            duration_seconds=actual_seconds,
+            started_at=started_at,
+            ended_at=ended_at,
+            metadata={"planned_minutes": minutes, "job_id": job_id},
         )
         log_activity(
             action="credits.consumed",
@@ -2058,7 +2071,12 @@ def _run_interview_evaluation(
             target_type="company",
             target_id=str(company_id),
             target_label=email,
-            metadata={"minutes": minutes, "round_type": round_type},
+            metadata={
+                "actual_seconds": usage_result.get("total_duration_seconds", actual_seconds),
+                "credits_consumed": usage_result.get("credits_consumed", 0),
+                "remainder_seconds": usage_result.get("new_remainder_seconds", 0),
+                "round_type": round_type,
+            },
         )
 
     return {"email": email, "interview_type": interview_type, **result}

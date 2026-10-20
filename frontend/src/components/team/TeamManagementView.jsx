@@ -37,6 +37,8 @@ export function TeamManagementView() {
   const [emailError, setEmailError] = useState("");
   const [createdUser, setCreatedUser] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendDone, setResendDone] = useState(false);
 
   const fetchTeam = async () => {
     setLoading(true);
@@ -118,9 +120,12 @@ export function TeamManagementView() {
       });
 
       setCreatedUser({
+        userId: data.user_id,
         fullName: fullName.trim(),
         email: email.trim(),
         password,
+        emailAutoSent: data.email_auto_sent === true,
+        emailError: data.email_auto_error || null,
       });
 
       await fetchTeam();
@@ -155,6 +160,40 @@ export function TeamManagementView() {
     setTimeout(() => setCopied(false), 2500);
   };
 
+  const handleResendCredentials = async () => {
+    if (!createdUser?.userId || resendLoading) return;
+    setResendLoading(true);
+    try {
+      const data = await apiFetchJson(
+        `/api/company/team/${createdUser.userId}/send-credentials`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            email: createdUser.email,
+            password: createdUser.password,
+          }),
+        }
+      );
+      setCreatedUser((prev) => ({
+        ...prev,
+        emailAutoSent: data.ok !== false && data.email_auto_sent !== false,
+        emailError: data.ok === false ? data.message || "Email failed" : null,
+      }));
+      if (data.ok !== false) {
+        setResendDone(true);
+        setTimeout(() => setResendDone(false), 2500);
+      }
+    } catch (err) {
+      setCreatedUser((prev) => ({
+        ...prev,
+        emailAutoSent: false,
+        emailError: err.message || "Failed to send email",
+      }));
+    } finally {
+      setResendLoading(false);
+    }
+  };
+
   const handleCloseModal = () => {
     setFullName("");
     setEmail("");
@@ -164,6 +203,7 @@ export function TeamManagementView() {
     setPasswordError("");
     setEmailError("");
     setCreatedUser(null);
+    setResendDone(false);
     setModalOpen(false);
   };
 
@@ -350,7 +390,11 @@ export function TeamManagementView() {
                 <div className="success-banner">
                   <CheckCircle size={32} className="text-success" />
                   <h3>Account Created for {createdUser.fullName}</h3>
-                  <p>Credentials have been generated. Share these credentials with your team member so they can log in.</p>
+                  <p>
+                    {createdUser.emailAutoSent
+                      ? `Credentials have been emailed to ${createdUser.email}.`
+                      : "Credentials have been generated. Share these credentials with your team member so they can log in."}
+                  </p>
                 </div>
 
                 <div className="credentials-box">
@@ -364,18 +408,56 @@ export function TeamManagementView() {
                   </div>
                 </div>
 
+                {createdUser.emailAutoSent === false && createdUser.emailError ? (
+                  <div className="notice error mb-4">
+                    Credential email could not be sent: {createdUser.emailError}
+                  </div>
+                ) : null}
+
                 <div className="modal-footer">
-                  <button className="btn btn-secondary" onClick={handleCopyCredentials}>
-                    {copied ? (
-                      <>
-                        <CheckCircle size={16} /> Copied to Clipboard
-                      </>
+                  <div className="email-status-actions">
+                    {createdUser.emailAutoSent ? (
+                      <span className="email-status-badge sent">
+                        <Mail size={14} />
+                        {resendDone ? "Email resent" : "Credentials sent via mail"}
+                      </span>
                     ) : (
-                      <>
-                        <Copy size={16} /> Copy Credentials
-                      </>
+                      <span className="email-status-badge failed">
+                        <XCircle size={14} />
+                        Email failed
+                      </span>
                     )}
-                  </button>
+                    <button className="btn btn-secondary" onClick={handleCopyCredentials}>
+                      {copied ? (
+                        <>
+                          <CheckCircle size={16} /> Copied
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={16} /> Copy Credentials
+                        </>
+                      )}
+                    </button>
+                    {createdUser.emailAutoSent ? (
+                      <button
+                        className="btn btn-secondary"
+                        onClick={handleResendCredentials}
+                        disabled={resendLoading}
+                      >
+                        <Mail size={16} />
+                        {resendLoading ? "Resending..." : "Resend Email"}
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-primary"
+                        onClick={handleResendCredentials}
+                        disabled={resendLoading}
+                      >
+                        <Mail size={16} />
+                        {resendLoading ? "Retrying..." : "Retry Send"}
+                      </button>
+                    )}
+                  </div>
                   <button className="btn btn-primary" onClick={handleCloseModal}>
                     Done
                   </button>

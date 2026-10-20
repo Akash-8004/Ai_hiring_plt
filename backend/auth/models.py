@@ -9,6 +9,7 @@ PHONE_RE = re.compile(r"^\+?[0-9][0-9\s().-]{6,19}$")
 
 MAX_CREDIT_ADJUSTMENT = 50000
 CREDIT_CAP_MULTIPLIER = 2
+PASSWORD_RESET_TOKEN_EXPIRE_MINUTES = 30
 
 # BUG 14: manage_users removed under default policy since no route enforces it
 VALID_PERMISSIONS = frozenset({
@@ -56,6 +57,27 @@ class LoginRequest(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
+    new_password: str = Field(min_length=8)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        return _validate_password(v)
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Public request to start the self-service password reset flow."""
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_forgot_email(cls, v: str) -> str:
+        return _validate_email(v)
+
+
+class ResetPasswordRequest(BaseModel):
+    """Self-service password reset using a one-time emailed token."""
+    token: str = Field(min_length=16)
     new_password: str = Field(min_length=8)
 
     @field_validator("new_password")
@@ -128,6 +150,7 @@ class CreateSubUserRequest(BaseModel):
     permissions: list[str] = Field(
         default_factory=lambda: ["conduct_interviews", "view_pipeline"]
     )
+    auto_send_email: bool = True
 
     @field_validator("email")
     @classmethod
@@ -188,6 +211,22 @@ class SendCredentialsRequest(BaseModel):
     """Payload for sending company admin credentials via email."""
     admin_email: str
     admin_password: str
+
+
+class SendTeamCredentialsRequest(BaseModel):
+    """Payload for (re)sending a team member's credentials via email.
+
+    The password is never stored server-side (only its bcrypt hash), so the
+    caller must supply the plaintext — same constraint as
+    ``SendCredentialsRequest``.
+    """
+    email: str
+    password: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_team_email(cls, v: str) -> str:
+        return _validate_email(v)
 
 
 class PlanTierUpdate(BaseModel):

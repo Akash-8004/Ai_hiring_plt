@@ -1,14 +1,17 @@
 import React, { useState } from "react";
-import { Lock, Mail, Eye, EyeOff, ShieldCheck, Sparkles, Building2 } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { Lock, Mail, Eye, EyeOff, ShieldCheck, Sparkles, CheckCircle } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
 
 export function LoginPage() {
   const { login, sessionError, setSessionError } = useAuth();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const resetSuccess = searchParams.get("reset") === "success";
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -43,6 +46,15 @@ export function LoginPage() {
             Enterprise hiring, confidently. AI screening &amp; voice interviews.
           </p>
         </div>
+
+        {resetSuccess ? (
+          <div className="login-alert success">
+            <span>
+              <CheckCircle size={14} /> Password reset successfully. Sign in
+              with your new password.
+            </span>
+          </div>
+        ) : null}
 
         {sessionError ? (
           <div className="login-alert warning">
@@ -102,6 +114,11 @@ export function LoginPage() {
               >
                 {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
+            </div>
+            <div className="login-forgot-row">
+              <Link to="/forgot-password" className="auth-link">
+                Forgot password?
+              </Link>
             </div>
           </div>
 

@@ -36,6 +36,7 @@ _leads = _db["leads"]
 _email_logs = _db["email_logs"]
 _jd_requests = _db["jd_change_requests"]
 _resume_jobs = _db["resume_jobs"]
+_interview_usage = _db["interview_usage"]
 
 # ── Indexes ─────────────────────────────────────────────────────────────────
 try:
@@ -76,6 +77,14 @@ try:
     _resume_jobs.create_index([("status", 1), ("created_at", 1)])
     _resume_jobs.create_index([("company_id", 1), ("status", 1)])
     _resume_jobs.create_index("expireAt", expireAfterSeconds=0)
+    try:
+        _db.create_collection("interview_usage")
+    except Exception:
+        pass
+    _interview_usage = _db["interview_usage"]
+    _interview_usage.create_index("event_id", unique=True)
+    _interview_usage.create_index([("company_id", 1), ("created_at", 1)])
+    _interview_usage.create_index([("candidate_email", 1), ("interview_type", 1)])
 except Exception:
     pass
 
@@ -170,6 +179,37 @@ def update_user_password(user_id: str, password_hash: str) -> None:
     _users.update_one(
         {"_id": ObjectId(user_id)},
         {"$set": {"password_hash": password_hash}},
+    )
+
+
+def set_user_password_reset_token(
+    user_id: str, token_hash: str, expires_at: datetime
+) -> None:
+    """Persist a one-time password-reset token hash + expiry on the user doc."""
+    _users.update_one(
+        {"_id": ObjectId(user_id)},
+        {"$set": {
+            "password_reset_token_hash": token_hash,
+            "password_reset_expires_at": expires_at,
+        }},
+    )
+
+
+def get_user_by_reset_token_hash(token_hash: str) -> dict | None:
+    """Look up a user by their pending password-reset token hash."""
+    if not token_hash:
+        return None
+    return _users.find_one({"password_reset_token_hash": token_hash})
+
+
+def clear_user_password_reset_token(user_id: str) -> None:
+    """Remove any pending password-reset token (single-use enforcement)."""
+    _users.update_one(
+        {"_id": ObjectId(user_id)},
+        {"$unset": {
+            "password_reset_token_hash": "",
+            "password_reset_expires_at": "",
+        }},
     )
 
 
@@ -285,6 +325,8 @@ def list_companies_with_counts() -> list[dict]:
             remaining = credits.get("remaining", 0)
             used = credits.get("used", 0)
             credits["adjustments"] = remaining + used - allowance
+        if "remainder_seconds" not in credits:
+            credits["remainder_seconds"] = 0
         c["credits"] = credits
         results.append(c)
     return results
@@ -418,6 +460,7 @@ def _fresh_credits_bucket(allowance: int, period: str | None = None) -> dict:
         "remaining": allowance,
         "overage": 0,
         "adjustments": 0,
+        "remainder_seconds": 0,
     }
 
 
@@ -491,6 +534,8 @@ def reset_company_credits_if_due(company_id: str) -> dict:
             remaining = credits.get("remaining", 0)
             used = credits.get("used", 0)
             credits["adjustments"] = remaining + used - allowance
+        if "remainder_seconds" not in credits:
+            credits["remainder_seconds"] = 0
         return credits
     allowance = _company_allowance(company)
     bucket = _fresh_credits_bucket(allowance, current_period)
@@ -557,6 +602,7 @@ def apply_plan_credit_change(company_id: str, new_allowance: int) -> dict:
         "remaining": new_remaining,
         "overage": overage,
         "adjustments": adjustments,
+        "remainder_seconds": credits.get("remainder_seconds", 0),
     }
     _companies.update_one(
         {"_id": ObjectId(company_id)},
@@ -1885,3 +1931,229 @@ def requeue_stale_resume_jobs(lease_seconds: int = 300) -> int:
         {"$set": {"status": "queued", "claimed_at": None}},
     )
     return result.modified_count
+
+
+CREDIT_PER_SECONDS = 600.0  # 10 minutes = 1 credit
+
+
+SECONDS_PER_CREDIT = 600
+
+
+def compute_cumulative_credits(previous_remainder_seconds: int, duration_seconds: int) -> tuple[int, int]:
+    """Return (credits_to_consume, new_remainder_seconds) for one interview.
+
+    Credits accumulate across candidates: 1 credit is debited per full block of
+    600 seconds (10 minutes). Leftover seconds carry forward to the next
+    interview for the same company.
+    """
+    prev = max(0, int(previous_remainder_seconds or 0))
+    dur = max(0, int(duration_seconds or 0))
+    total = prev + dur
+    return total // SECONDS_PER_CREDIT, total % SECONDS_PER_CREDIT
+
+
+def record_interview_usage(
+    *,
+    company_id: str,
+    candidate_email: str,
+    interview_type: str,
+    event_id: str,
+    duration_seconds: float | int,
+    started_at: str | datetime | None = None,
+    ended_at: str | datetime | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    """Record completed interview usage and apply cumulative credits (1 credit = 600s).
+    Returns dict with credits consumed, remainder seconds, etc. Idempotent by event_id.
+    """
+    try:
+        duration_seconds = int(float(duration_seconds))
+    except (TypeError, ValueError):
+        duration_seconds = 0
+    if duration_seconds < 0:
+        duration_seconds = 0
+    now = datetime.now(timezone.utc)
+    if isinstance(started_at, str):
+        try:
+            started_at_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        except Exception:
+            started_at_dt = now
+    elif isinstance(started_at, datetime):
+        started_at_dt = started_at.astimezone(timezone.utc) if started_at.tzinfo else started_at.replace(tzinfo=timezone.utc)
+    else:
+        started_at_dt = now
+    if isinstance(ended_at, str):
+        try:
+            ended_at_dt = datetime.fromisoformat(ended_at.replace("Z", "+00:00"))
+        except Exception:
+            ended_at_dt = now
+    elif isinstance(ended_at, datetime):
+        ended_at_dt = ended_at.astimezone(timezone.utc) if ended_at.tzinfo else ended_at.replace(tzinfo=timezone.utc)
+    else:
+        ended_at_dt = now
+    existing = _interview_usage.find_one({"event_id": event_id})
+    if existing and existing.get("status") != "pending":
+        return {
+            "credits_consumed": existing.get("credits_consumed", 0),
+            "previous_remainder_seconds": existing.get("previous_remainder_seconds", 0),
+            "new_remainder_seconds": existing.get("new_remainder_seconds", 0),
+            "total_duration_seconds": existing.get("duration_seconds", 0),
+            "idempotent": True,
+        }
+    cid = ObjectId(company_id)
+    company = get_company_by_id(company_id)
+    if not company:
+        return {"credits_consumed": 0, "error": "company_not_found", "idempotent": False}
+    if not existing:
+        try:
+            _interview_usage.insert_one({
+                "event_id": event_id,
+                "company_id": cid,
+                "candidate_email": candidate_email,
+                "interview_type": interview_type,
+                "duration_seconds": int(duration_seconds),
+                "status": "pending",
+                "created_at": now,
+            })
+        except Exception:
+            # Another worker inserted the same event first; fall through to the
+            # atomic claim below.
+            pass
+
+    # Atomically claim the event so two concurrent deliveries of the same
+    # completion can never both debit credits. A stale claim (worker crashed
+    # mid-processing) is re-claimable after 5 minutes.
+    from datetime import timedelta
+    claimed = _interview_usage.find_one_and_update(
+        {"event_id": event_id, "status": "pending"},
+        {"$set": {"status": "processing", "claimed_at": now}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not claimed:
+        claimed = _interview_usage.find_one_and_update(
+            {
+                "event_id": event_id,
+                "status": "processing",
+                "claimed_at": {"$lt": now - timedelta(minutes=5)},
+            },
+            {"$set": {"claimed_at": now}},
+            return_document=ReturnDocument.AFTER,
+        )
+    if not claimed:
+        existing = _interview_usage.find_one({"event_id": event_id})
+        if existing:
+            return {
+                "credits_consumed": existing.get("credits_consumed", 0),
+                "previous_remainder_seconds": existing.get("previous_remainder_seconds", 0),
+                "new_remainder_seconds": existing.get("new_remainder_seconds", 0),
+                "total_duration_seconds": existing.get("duration_seconds", 0),
+                "idempotent": True,
+            }
+    reset_company_credits_if_due(company_id)
+    updated = _companies.find_one_and_update(
+        {"_id": cid},
+        [
+            {"$set": {
+                "_prev": {"$ifNull": ["$credits.remainder_seconds", 0]},
+                "_remaining": {"$ifNull": ["$credits.remaining", 0]},
+                "_used": {"$ifNull": ["$credits.used", 0]},
+            }},
+            {"$set": {"_total": {"$add": ["$_prev", int(duration_seconds)]}}},
+            {"$set": {"_needed": {"$toInt": {"$floor": {"$divide": ["$_total", SECONDS_PER_CREDIT]}}}}},
+            {"$set": {"_ok": {"$gte": ["$_remaining", "$_needed"]}}},
+            {"$set": {
+                "credits.remaining": {"$cond": ["$_ok", {"$subtract": ["$_remaining", "$_needed"]}, "$_remaining"]},
+                "credits.used": {"$cond": ["$_ok", {"$add": ["$_used", "$_needed"]}, "$_used"]},
+                "credits.remainder_seconds": {"$cond": ["$_ok", {"$mod": ["$_total", 600]}, "$_total"]},
+                "credits.last_event_id": event_id,
+                "credits.last_consumed_credits": {"$cond": ["$_ok", "$_needed", 0]},
+                "credits.last_previous_remainder_seconds": "$_prev",
+                "credits.last_new_remainder_seconds": {"$cond": ["$_ok", {"$mod": ["$_total", 600]}, "$_total"]},
+            }},
+            {"$unset": ["_prev", "_remaining", "_used", "_total", "_needed", "_ok"]},
+        ],
+        return_document=ReturnDocument.AFTER,
+    )
+    if updated and updated.get("credits", {}).get("last_event_id") == event_id:
+        credits_to_consume = int(updated["credits"].get("last_consumed_credits", 0))
+        prev_remainder = int(updated["credits"].get("last_previous_remainder_seconds", 0))
+        new_remainder = int(updated["credits"].get("last_new_remainder_seconds", 0))
+    else:
+        credits_to_consume = 0
+        prev_remainder = 0
+        new_remainder = 0
+    usage_doc = {
+        "event_id": event_id,
+        "company_id": cid,
+        "candidate_email": candidate_email,
+        "interview_type": interview_type,
+        "duration_seconds": int(duration_seconds),
+        "duration_minutes": round(int(duration_seconds) / 60.0, 4),
+        "previous_remainder_seconds": prev_remainder,
+        "new_remainder_seconds": new_remainder,
+        "credits_consumed": credits_to_consume,
+        "started_at": started_at_dt,
+        "ended_at": ended_at_dt,
+        "created_at": now,
+        "status": "processed",
+        "metadata": metadata or {},
+    }
+    try:
+        _interview_usage.update_one({"event_id": event_id}, {"$set": usage_doc})
+    except Exception:
+        pass
+    try:
+        log_usage(
+            candidate_email,
+            company_id,
+            minutes=round(int(duration_seconds) / 60.0, 2),
+            round_type=interview_type,
+            action="interview.completed",
+            detail=f"actual_seconds={int(duration_seconds)} credits={credits_to_consume}",
+        )
+    except Exception:
+        pass
+    return {
+        "credits_consumed": credits_to_consume,
+        "previous_remainder_seconds": prev_remainder,
+        "new_remainder_seconds": new_remainder,
+        "total_duration_seconds": int(duration_seconds),
+        "idempotent": False,
+    }
+
+
+def get_interview_usage(
+    company_id: str,
+    page: int = 1,
+    limit: int = 50,
+    interview_type: str | None = None,
+) -> dict:
+    query: dict = {"company_id": ObjectId(company_id), "status": "processed"}
+    if interview_type:
+        query["interview_type"] = interview_type
+    total = _interview_usage.count_documents(query)
+    skip = (page - 1) * limit
+    entries = list(
+        _interview_usage.find(query)
+        .sort("created_at", DESCENDING)
+        .skip(skip)
+        .limit(limit)
+    )
+
+    def _clean(val):
+        if isinstance(val, ObjectId):
+            return str(val)
+        if isinstance(val, datetime):
+            return val.isoformat()
+        if isinstance(val, dict):
+            return {k: _clean(v) for k, v in val.items()}
+        if isinstance(val, list):
+            return [_clean(item) for item in val]
+        return val
+
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "entries": [_clean(e) for e in entries],
+    }

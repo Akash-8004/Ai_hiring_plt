@@ -1032,28 +1032,30 @@ export function SuperAdminDashboard() {
                                     <table className="sub-users-table mt-4">
                                       <thead>
                                         <tr>
-                                          <th>Time</th>
+                                          <th>Completed At</th>
                                           <th>Candidate</th>
                                           <th>Round</th>
-                                          <th>Min</th>
-                                          <th>Action</th>
+                                          <th>Duration</th>
+                                          <th>Credits Used</th>
+                                          <th>Carry Forward</th>
                                         </tr>
                                       </thead>
                                       <tbody>
-                                        {(companyUsage.usage?.entries || []).map((entry) => (
-                                          <tr key={entry._id || entry.created_at}>
+                                        {(companyUsage.interview_usage?.entries || []).map((entry) => (
+                                          <tr key={entry._id || entry.event_id || entry.created_at}>
                                             <td className="text-xs text-muted">
-                                              {entry.created_at ? new Date(entry.created_at).toLocaleString(undefined, { timeZone: "Asia/Kolkata" }) : "—"}
+                                              {entry.ended_at || entry.created_at ? new Date(entry.ended_at || entry.created_at).toLocaleString(undefined, { timeZone: "Asia/Kolkata" }) : "—"}
                                             </td>
                                             <td className="font-mono text-xs">{entry.candidate_email || "—"}</td>
-                                            <td>{entry.round_type}</td>
-                                            <td>{entry.minutes}</td>
-                                            <td>{entry.action}</td>
+                                            <td>{entry.interview_type}</td>
+                                            <td>{Math.floor((entry.duration_seconds || 0) / 60)}m {String(Math.round((entry.duration_seconds || 0) % 60)).padStart(2, "0")}s</td>
+                                            <td>{entry.credits_consumed ?? 0}</td>
+                                            <td className="text-xs text-muted">{Math.floor((entry.new_remainder_seconds || 0) / 60)}m {String(Math.round((entry.new_remainder_seconds || 0) % 60)).padStart(2, "0")}s</td>
                                           </tr>
                                         ))}
                                       </tbody>
                                     </table>
-                                    {(companyUsage.usage?.total || 0) > 10 && (
+                                    {(companyUsage.interview_usage?.total || 0) > 10 && (
                                       <div className="flex-row gap-2 mt-2">
                                         <button
                                           className="btn btn-secondary btn-xs"
@@ -1065,7 +1067,7 @@ export function SuperAdminDashboard() {
                                         <span className="text-xs text-muted">Page {usagePage}</span>
                                         <button
                                           className="btn btn-secondary btn-xs"
-                                          disabled={usagePage * 10 >= (companyUsage.usage?.total || 0)}
+                                          disabled={usagePage * 10 >= (companyUsage.interview_usage?.total || 0)}
                                           onClick={() => loadCompanyUsage(comp._id, usagePage + 1)}
                                         >
                                           Next
