@@ -1472,6 +1472,25 @@ def set_candidate_hr_interview(
     )
 
 
+def claim_candidate_hired_notification(
+    email: str, company_id: str | None = None, job_id: str | None = None,
+) -> bool:
+    """Atomically claim the right to send the "candidate hired" notification.
+
+    Returns ``True`` exactly once per candidate — the first caller wins. Later
+    calls (evaluation re-run, admin resend, etc.) return ``False`` and must
+    not send again.
+    """
+    result = _candidates.update_one(
+        {
+            **_candidate_filter(email, company_id, job_id),
+            "hired_notification_sent": {"$ne": True},
+        },
+        {"$set": {"hired_notification_sent": True}},
+    )
+    return result.matched_count == 1
+
+
 def _interview_field(interview_type: str) -> str:
     return "hr_interview" if interview_type == "hr" else "technical_interview"
 

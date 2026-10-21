@@ -34,6 +34,20 @@ def _format_deadline(deadline: str | None) -> str:
     return dt.astimezone(IST).strftime("%B %d, %Y at %I:%M %p IST")
 
 
+def _forgot_password_url(portal_url: str) -> str:
+    """Derive the /forgot-password URL from the login portal URL.
+
+    Callers pass ``{frontend_base_url()}/login``; the frontend routes
+    ``/forgot-password`` (see ``frontend/src/main.jsx``) as the login page's
+    "Forgot password?" link target. Falls back to the portal URL itself when
+    the input does not end in ``/login``.
+    """
+    base = (portal_url or "").rstrip("/")
+    if base.endswith("/login"):
+        return base[: -len("/login")] + "/forgot-password"
+    return portal_url
+
+
 def interview_invite_email(
     candidate_name: str,
     interview_type: str,
@@ -125,13 +139,20 @@ def credential_delivery_email(
     """
     subject = "Your AI Hiring Platform Credentials"
 
+    forgot_password_url = _forgot_password_url(portal_url)
+
     plain_body = (
         f"Welcome to the AI Hiring Platform!\n\n"
         f"Your company \"{company_name}\" has been onboarded. Below are your login credentials:\n\n"
         f"Login Email : {admin_email}\n"
         f"Password    : {password}\n"
         f"Portal URL  : {portal_url}\n\n"
-        f"IMPORTANT: Please change your password after your first login.\n\n"
+        f"IMPORTANT: The credentials above are your INITIAL credentials (temporary password).\n"
+        f"You MUST reset your password before continuing. To do so:\n"
+        f"1. Go to the Login page ({portal_url})\n"
+        f"2. Click the \"Forgot Password\" button/link on the Login page\n"
+        f"3. Follow the email link to set a new password of your own\n\n"
+        f"Reset Password URL: {forgot_password_url}\n\n"
         f"— AI Hiring Platform"
     )
 
@@ -152,12 +173,18 @@ def credential_delivery_email(
     <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Login Email</td><td style="padding: 10px 16px; font-family: monospace;">{_admin_email}</td></tr>
     <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Password</td><td style="padding: 10px 16px; font-family: monospace;">{_password}</td></tr>
   </table>
+  <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 12px 16px; margin: 16px 0;">
+    <p style="margin: 0 0 6px 0; font-size: 13px; color: #ef4444; font-weight: 700;">⚠ This is your initial credential</p>
+    <p style="margin: 0; font-size: 13px; color: #7f1d1d;">You <strong>must reset your password</strong> using the &ldquo;Forgot Password&rdquo; button on the Login page before continuing. The password above is only your temporary starting password.</p>
+  </div>
   <p style="margin: 20px 0;">
     <a href="{portal_url}" style="display: inline-block; padding: 10px 24px; background: #6366f1; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Go to Login Portal</a>
+    &nbsp;
+    <a href="{forgot_password_url}" style="display: inline-block; padding: 10px 24px; background: #ef4444; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Forgot Password</a>
   </p>
   <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
   <p style="font-size: 13px; color: #ef4444; font-weight: 600;">⚠ Security Notice</p>
-  <p style="font-size: 13px; color: #64748b;">Please change your password immediately after your first login.</p>
+  <p style="font-size: 13px; color: #64748b;">These are your initial credentials. Go to the Login page and click the <strong>&ldquo;Forgot Password&rdquo;</strong> button to reset your password immediately.</p>
 </body>
 </html>"""
 
@@ -190,6 +217,8 @@ def team_member_credentials_email(
         f"\nInvited by  : {invited_by}\n" if invited_by else "\n"
     )
 
+    forgot_password_url = _forgot_password_url(portal_url)
+
     plain_body = (
         f"Hello {member_name},\n\n"
         f"You've been added as a team member of \"{company_name}\" "
@@ -199,7 +228,12 @@ def team_member_credentials_email(
         f"Permissions : {permissions_label}\n"
         f"Portal URL  : {portal_url}\n"
         f"{invited_by_line}"
-        f"IMPORTANT: Please change your password after your first login.\n\n"
+        f"IMPORTANT: The credentials above are your INITIAL credentials (temporary password).\n"
+        f"You MUST reset your password before continuing. To do so:\n"
+        f"1. Go to the Login page ({portal_url})\n"
+        f"2. Click the \"Forgot Password\" button/link on the Login page\n"
+        f"3. Follow the email link to set a new password of your own\n\n"
+        f"Reset Password URL: {forgot_password_url}\n\n"
         f"— AI Hiring Platform"
     )
 
@@ -233,12 +267,18 @@ def team_member_credentials_email(
     <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Permissions</td><td style="padding: 10px 16px;">{_permissions_label}</td></tr>
     {_invited_by_html}
   </table>
+  <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 12px 16px; margin: 16px 0;">
+    <p style="margin: 0 0 6px 0; font-size: 13px; color: #ef4444; font-weight: 700;">⚠ This is your initial credential</p>
+    <p style="margin: 0; font-size: 13px; color: #7f1d1d;">You <strong>must reset your password</strong> using the &ldquo;Forgot Password&rdquo; button on the Login page before continuing. The password above is only your temporary starting password.</p>
+  </div>
   <p style="margin: 20px 0;">
     <a href="{portal_url}" style="display: inline-block; padding: 10px 24px; background: #6366f1; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Go to Login Portal</a>
+    &nbsp;
+    <a href="{forgot_password_url}" style="display: inline-block; padding: 10px 24px; background: #ef4444; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Forgot Password</a>
   </p>
   <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
   <p style="font-size: 13px; color: #ef4444; font-weight: 600;">⚠ Security Notice</p>
-  <p style="font-size: 13px; color: #64748b;">Please change your password immediately after your first login.</p>
+  <p style="font-size: 13px; color: #64748b;">These are your initial credentials. Go to the Login page and click the <strong>&ldquo;Forgot Password&rdquo;</strong> button to reset your password immediately.</p>
 </body>
 </html>"""
 
@@ -538,6 +578,72 @@ def demo_confirmation_email(
   {html_message}
   <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
   <p style="font-size: 12px; color: #94a3b8;">We look forward to speaking with you!</p>
+</body>
+</html>"""
+
+    return subject, html_body, plain_body
+
+
+def candidate_hired_email(
+    candidate_name: str,
+    candidate_email: str,
+    company_name: str,
+    job_title: str,
+    hr_label: str,
+    hr_score: float | int | str,
+    tech_decision: str,
+    tech_score: float | int | str,
+    dashboard_url: str,
+) -> tuple[str, str, str]:
+    """Build the notification sent to company staff when a candidate has
+    passed the final (technical) interview round and is ready to be hired.
+
+    The Technical round is always last; the HR round may have been bypassed
+    by an admin override, so ``hr_label`` can be "Bypassed / Not taken".
+    """
+    subject = (
+        f"Candidate {candidate_name} passed the final round — {job_title or company_name}"
+    )
+
+    plain_body = (
+        f"A candidate has passed the final (technical) interview round for "
+        f"{company_name} and is ready to be hired.\n\n"
+        f"Candidate  : {candidate_name} <{candidate_email}>\n"
+        f"Job Title  : {job_title or 'N/A'}\n"
+        f"HR Round   : {hr_label} (Score: {hr_score})\n"
+        f"Tech Round : {tech_decision} (Score: {tech_score})\n\n"
+        f"View the candidate on your Hiring Pipeline dashboard:\n"
+        f"{dashboard_url}\n\n"
+        f"— AI Hiring Platform"
+    )
+
+    _candidate_name = _esc(candidate_name)
+    _candidate_email = _esc(candidate_email)
+    _company_name = _esc(company_name)
+    _job_title = _esc(job_title or "N/A")
+    _hr_label = _esc(hr_label)
+    _tech_decision = _esc(tech_decision)
+
+    _hr_score_html = _esc(str(hr_score))
+    _tech_score_html = _esc(str(tech_score))
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; line-height: 1.6; max-width: 560px; margin: 0 auto; padding: 24px;">
+  <h2 style="margin-top: 0; color: #0f172a;">Candidate passed the final round 🎉</h2>
+  <p><strong>{_candidate_name}</strong> &lt;{_candidate_email}&gt; has passed the final (technical) interview round for <strong>{_company_name}</strong> and is <strong>ready to be hired</strong>.</p>
+  <table style="border-collapse: collapse; width: 100%; margin: 16px 0; background: #f8fafc; border-radius: 8px;">
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Job Title</td><td style="padding: 10px 16px;">{_job_title}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">HR Round</td><td style="padding: 10px 16px;">{_hr_label} &nbsp;— Score: {_hr_score_html}</td></tr>
+    <tr><td style="padding: 10px 16px; font-weight: 600; color: #475569;">Technical Round (Final)</td><td style="padding: 10px 16px;"><span style="color: #16a34a; font-weight: 700;">{_tech_decision}</span> &nbsp;— Score: {_tech_score_html}</td></tr>
+  </table>
+  <p style="margin: 20px 0;">
+    <a href="{dashboard_url}" style="display: inline-block; padding: 10px 24px; background: #6366f1; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">View Hiring Pipeline</a>
+  </p>
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+  <p style="font-size: 12px; color: #94a3b8;">You are receiving this because you are a member of the {_company_name} hiring team on the AI Hiring Platform.</p>
 </body>
 </html>"""
 

@@ -7,6 +7,7 @@ import math
 import os
 import re
 import secrets
+import threading
 import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -41,6 +42,7 @@ from backend.services import r2_storage
 from backend.storage import database
 from backend.services import email_service
 from backend.services.email_templates import interview_invite_email
+from backend.services import pipeline_notifier
 from backend.auth.security import (
     get_current_user,
     hash_password,
@@ -2047,6 +2049,19 @@ def _run_interview_evaluation(
         database.set_candidate_technical_interview(email, interview, company_id, job_id)
     else:
         database.set_candidate_hr_interview(email, interview, company_id, job_id)
+
+    # Pipeline notification: the technical round is always the FINAL round
+    # (HR runs first and may even be bypassed by an admin override), so a
+    # technical PASS means the candidate is ready to be hired. Email the
+    # company admin + all staff. Fire-and-forget daemon thread so SMTP
+    # latency never delays the candidate's evaluation response.
+    # Internally guarded + one-time claim (no duplicate sends).
+    if interview_type == "technical" and interview.get("decision") == "PASS" and company_id:
+        threading.Thread(
+            target=pipeline_notifier.notify_candidate_hired,
+            args=(email, str(company_id), job_id),
+            daemon=True,
+        ).start()
 
     if company_id:
         # Cumulative usage: credits are debited on 10-minute (600s) blocks of the
