@@ -332,12 +332,16 @@ export function InterviewApp({ token, interviewType }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           token,
-          transcript: transcriptRef.current,
           interview_type: interviewType,
         }),
       });
       if (!response.ok) {
-        setError("Evaluation failed — try again");
+        let message = "Evaluation failed — try again";
+        try {
+          const body = await response.json();
+          if (typeof body.detail === "string") message = body.detail;
+        } catch (e) { /* keep the fallback */ }
+        setError(message);
         setPhase("done");
         return;
       }

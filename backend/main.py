@@ -45,6 +45,7 @@ from backend.services.email_templates import interview_invite_email
 from backend.services import pipeline_notifier
 from backend.auth.security import (
     get_current_user,
+    has_permission,
     hash_password,
     log_activity,
     require_authenticated,
@@ -1194,9 +1195,35 @@ def evaluate_interview(payload: EvaluationPayload) -> dict[str, Any]:
     if not email:
         raise HTTPException(status_code=404, detail="Invitation not found or invalid.")
     candidate_doc = database.get_candidate_doc(email, company_id, token_job_id) or {}
-    invitation = _ensure_invitation_active(payload.token, candidate_doc)
-    if payload.interview_type != invitation.get("type", "technical"):
+    _ensure_invitation_active(payload.token, candidate_doc)
+    interview_type = _resolve_interview_type(payload.token, candidate_doc)
+    if payload.interview_type != interview_type:
         raise HTTPException(status_code=400, detail="Interview type does not match invitation.")
+
+    interview = candidate_doc.get(_interview_field_for_type(interview_type)) or {}
+    if interview.get("status") == "completed":
+        existing_eval = interview.get("evaluation") or {}
+        return {"email": email, "interview_type": interview_type, **existing_eval}
+    if interview.get("status") != "in_progress" or int(interview.get("attempts_used") or 0) < 1:
+        raise HTTPException(status_code=409, detail="This interview has not been started.")
+    if not interview.get("evaluation_ready"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This interview requires camera and microphone participation "
+                "before it can be completed."
+            ),
+        )
+
+    hr_transcript, tech_transcript = _split_transcript_by_round(
+        candidate_doc.get("interview_transcript"),
+        candidate_doc.get("hr_interview"),
+        candidate_doc.get("technical_interview"),
+    )
+    server_transcript = tech_transcript if interview_type == "technical" else hr_transcript
+    if not any(turn.get("role") == "candidate" for turn in server_transcript):
+        raise HTTPException(status_code=409, detail="No interview transcript was recorded.")
+
     job_id = candidate_doc.get("job_id")
     candidates = database.load_candidates(company_id, job_id=job_id)
     resume = next((c for c in candidates if c.email == email), None)
@@ -1206,8 +1233,8 @@ def evaluate_interview(payload: EvaluationPayload) -> dict[str, Any]:
         database.get_job_by_id(str(company_id), job_id) if company_id and job_id else None
     ) or database.load_job(company_id) or DEFAULT_JOB
     return _run_interview_evaluation(
-        email, resume, payload.interview_type, payload.transcript,
-        current_job, company_id, job_id=job_id,
+        email, resume, interview_type, server_transcript,
+        current_job, company_id, job_id=job_id, media=interview.get("media"),
     )
 
 
@@ -1301,6 +1328,14 @@ CLOSING_PHRASES = (
 SPEECH_THRESHOLD = 0.008  # normalised RMS above which we treat audio as speech
 SILENCE_FLUSH = 1.0  # seconds of low-energy audio before finalizing the turn
 
+MIN_SPEECH_SECONDS = float(os.getenv("INTERVIEW_MIN_SPEECH_SECONDS", "30"))
+MIN_SPEECH_BEFORE_TYPING = float(os.getenv("INTERVIEW_MIN_SPEECH_BEFORE_TYPING", "5"))
+MIN_SPOKEN_WORDS = int(os.getenv("INTERVIEW_MIN_SPOKEN_WORDS", "25"))
+MIN_VIDEO_FRAMES = int(os.getenv("INTERVIEW_MIN_VIDEO_FRAMES", "6"))
+MAX_VIDEO_AGE_SECONDS = float(os.getenv("INTERVIEW_MAX_VIDEO_AGE_SECONDS", "15"))
+PCM_BYTES_PER_SECOND = 16000 * 2
+MAX_VIDEO_FRAME_BYTES = 250_000
+
 
 def _pcm_rms(data: bytes) -> float:
     """Normalised RMS of 16-bit little-endian PCM (0.0..1.0)."""
@@ -1323,6 +1358,47 @@ def _interview_is_complete(transcript: list[dict]) -> bool:
             text = str(message.get("content", "") or "").lower()
             return any(phrase in text for phrase in CLOSING_PHRASES)
     return False
+
+
+def _new_media_state() -> dict[str, Any]:
+    return {
+        "audio_seconds": 0.0,
+        "speech_seconds": 0.0,
+        "speech_chunks": 0,
+        "video_frames": 0,
+        "last_audio_at": 0.0,
+        "last_video_at": 0.0,
+    }
+
+
+def _media_summary(media: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "audio_seconds": round(float(media.get("audio_seconds") or 0), 2),
+        "speech_seconds": round(float(media.get("speech_seconds") or 0), 2),
+        "speech_chunks": int(media.get("speech_chunks") or 0),
+        "video_frames": int(media.get("video_frames") or 0),
+        "last_audio_at": media.get("last_audio_at") or None,
+        "last_video_at": media.get("last_video_at") or None,
+    }
+
+
+def _spoken_candidate_words(transcript: list[dict]) -> int:
+    return sum(
+        len(str(message.get("content", "") or "").split())
+        for message in transcript
+        if message.get("role") == "candidate" and message.get("type") != "written"
+    )
+
+
+def _media_gate_ok(media: dict[str, Any], transcript: list[dict]) -> bool:
+    if float(media.get("speech_seconds") or 0) < MIN_SPEECH_SECONDS:
+        return False
+    if int(media.get("video_frames") or 0) < MIN_VIDEO_FRAMES:
+        return False
+    last_video = float(media.get("last_video_at") or 0)
+    if not last_video or time.time() - last_video > MAX_VIDEO_AGE_SECONDS:
+        return False
+    return _spoken_candidate_words(transcript) >= MIN_SPOKEN_WORDS
 
 
 @app.websocket("/ws/interview/{token}")
@@ -1377,6 +1453,15 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
     transcript: list[dict] = []
     user_buffer: list[str] = []
     model_buffer: list[str] = []
+    state: dict[str, Any] = {
+        "model_active": False,
+        "media": _new_media_state(),
+        "end_requested": False,
+        "completed": False,
+        "finalizing": False,
+        "typed_blocked_sent": False,
+        "media_persisted_at": 0.0,
+    }
 
     def flush_user_turn() -> None:
         text = " ".join(user_buffer).strip()
@@ -1404,6 +1489,54 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
         except Exception:
             pass
 
+    async def prepare_evaluation() -> bool:
+        flush_user_turn()
+        flush_model_turn()
+        media = state["media"]
+        summary = _media_summary(media)
+        ready = _media_gate_ok(media, transcript)
+        database.set_candidate_interview_evaluation_ready(
+            email, interview_type, ready, summary, company_id, job_id
+        )
+        if not ready:
+            await send_ws({
+                "type": "error",
+                "code": "media_required",
+                "message": (
+                    "This interview requires camera and microphone participation "
+                    "before it can be completed."
+                ),
+            })
+        else:
+            await send_ws({"type": "evaluation_ready"})
+        return ready
+
+    async def finalize_interview() -> bool:
+        if state["completed"] or state["finalizing"]:
+            return bool(state["completed"])
+        state["finalizing"] = True
+        if not await prepare_evaluation():
+            done.set()
+            return False
+        result = await asyncio.to_thread(
+            _run_interview_evaluation,
+            email, resume, interview_type, list(transcript), current_job, company_id, job_id,
+            media=_media_summary(state["media"]),
+        )
+        if result.get("blocked"):
+            await send_ws({
+                "type": "error",
+                "message": result.get("message", "Insufficient interview credits."),
+                "blocked": True,
+                "credits": result.get("credits"),
+                "required": result.get("required"),
+            })
+        else:
+            await send_ws({"type": "evaluation", "result": result})
+        state["completed"] = True
+        done.set()
+        return True
+
     async def client_loop(to_gemini: asyncio.Queue, done: asyncio.Event) -> None:
         try:
             while not done.is_set():
@@ -1418,9 +1551,35 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
                 if mtype == "audio":
                     data = base64.b64decode(msg.get("data") or "")
                     await to_gemini.put(("audio", data))
+                elif mtype == "video_frame":
+                    data = msg.get("data") or ""
+                    try:
+                        raw = base64.b64decode(data, validate=True)
+                    except Exception:
+                        raw = b""
+                    if 0 < len(raw) <= MAX_VIDEO_FRAME_BYTES and raw[:2] == b"\xff\xd8":
+                        media = state["media"]
+                        media["video_frames"] = int(media.get("video_frames") or 0) + 1
+                        media["last_video_at"] = time.time()
                 elif mtype == "answer":
-                    answer_text = (msg.get("text") or "").strip()
-                    question = (msg.get("question") or "").strip()
+                    media = state["media"]
+                    if (
+                        float(media.get("speech_seconds") or 0) < MIN_SPEECH_BEFORE_TYPING
+                        or int(media.get("video_frames") or 0) < 1
+                    ):
+                        if not state.get("typed_blocked_sent"):
+                            state["typed_blocked_sent"] = True
+                            await send_ws({
+                                "type": "error",
+                                "code": "speech_required",
+                                "message": (
+                                    "Please answer the first questions by voice before "
+                                    "using written answers."
+                                ),
+                            })
+                        continue
+                    answer_text = (msg.get("text") or "").strip()[:5000]
+                    question = (msg.get("question") or "").strip()[:2000]
                     if answer_text:
                         turn = {
                             "role": "candidate",
@@ -1459,6 +1618,7 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
                             )
                         )
                 elif mtype == "end":
+                    state["end_requested"] = True
                     done.set()
         except (WebSocketDisconnect, RuntimeError):
             done.set()
@@ -1479,10 +1639,24 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
                 now = time.monotonic()
                 if kind == "audio":
                     if not state["model_active"]:
+                        rms = _pcm_rms(payload)
+                        chunk_seconds = len(payload) / PCM_BYTES_PER_SECOND
+                        media = state["media"]
+                        now_wall = time.time()
+                        media["audio_seconds"] = float(media.get("audio_seconds") or 0) + chunk_seconds
+                        media["last_audio_at"] = now_wall
+                        if rms >= SPEECH_THRESHOLD:
+                            media["speech_seconds"] = float(media.get("speech_seconds") or 0) + chunk_seconds
+                            media["speech_chunks"] = int(media.get("speech_chunks") or 0) + 1
+                        if now_wall - state["media_persisted_at"] >= 5:
+                            state["media_persisted_at"] = now_wall
+                            database.set_candidate_interview_evaluation_ready(
+                                email, interview_type, None, _media_summary(media), company_id, job_id
+                            )
                         # Stream everything to Gemini; its automatic VAD detects the
                         # speech. When the candidate falls silent long enough we send
                         # audio_stream_end so Gemini finalizes the turn and replies.
-                        if _pcm_rms(payload) >= SPEECH_THRESHOLD:
+                        if rms >= SPEECH_THRESHOLD:
                             last_speech = now
                         elif last_speech and now - last_speech > SILENCE_FLUSH:
                             await relay.audio_stream_end(session)
@@ -1540,21 +1714,7 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
                 model_turn_started = False
                 await send_ws({"type": "turn_complete"})
                 if _interview_is_complete(transcript):
-                    result = await asyncio.to_thread(
-                        _run_interview_evaluation,
-                        email, resume, interview_type, list(transcript), current_job, company_id, job_id,
-                    )
-                    if result.get("blocked"):
-                        await send_ws({
-                            "type": "error",
-                            "message": result.get("message", "Insufficient interview credits."),
-                            "blocked": True,
-                            "credits": result.get("credits"),
-                            "required": result.get("required"),
-                        })
-                    else:
-                        await send_ws({"type": "evaluation", "result": result})
-                    done.set()
+                    await finalize_interview()
                     try:
                         await websocket.close(code=1000)
                     except Exception:
@@ -1587,17 +1747,21 @@ async def interview_live_ws(websocket: WebSocket, token: str) -> None:
                     else []
                 ),
             })
-            state: dict = {"model_active": False}
             tasks = [
                 asyncio.create_task(client_loop(to_gemini, done)),
                 asyncio.create_task(send_loop(session, to_gemini, done, state)),
                 asyncio.create_task(receive_loop(session, done, state)),
             ]
+            done_wait = asyncio.create_task(done.wait())
+            all_tasks = [*tasks, done_wait]
             try:
-                await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED)
+                await asyncio.wait(all_tasks, return_when=asyncio.FIRST_COMPLETED)
             finally:
-                for task in tasks:
+                for task in all_tasks:
                     task.cancel()
+                await asyncio.gather(*all_tasks, return_exceptions=True)
+            if state["end_requested"] and not state["completed"]:
+                await prepare_evaluation()
     except Exception as exc:
         await send_ws({"type": "error", "message": str(exc)})
     finally:
@@ -1649,6 +1813,11 @@ def _workspace_payload(
     stored_job = drive
     current_job = stored_job or DEFAULT_JOB
     job_doc = database.get_job_doc(company_id, effective_job_id) if company_id and effective_job_id else {}
+    # The candidate pipeline (rows, scores, resumes, invitation tokens) is only
+    # exposed to users holding the view_pipeline permission. Everyone else gets
+    # the workspace scaffolding (company, drives, deadlines) with no candidate
+    # data, so hiding the menu is not the only line of defence.
+    can_view_pipeline = has_permission(user, "view_pipeline")
     candidate_resumes = (
         database.load_candidates(company_id, job_id=effective_job_id)
         if company_id
@@ -1725,7 +1894,7 @@ def _workspace_payload(
         else:
             unscored_resumes.append(r)
 
-    if unscored_resumes:
+    if can_view_pipeline and unscored_resumes:
         # Guard against synchronous Gemini timeout storm if multiple unscored candidates
         use_fast_scoring = len(unscored_resumes) > 5 and ranking_service.provider == "gemini"
         svc = get_local_ranking_service() if use_fast_scoring else ranking_service
@@ -1873,6 +2042,14 @@ def _workspace_payload(
                 prices = database.get_plan_prices()
                 company_info["plan_price"] = prices.get(company.get("plan", "starter"))
 
+    if not can_view_pipeline:
+        # Never return candidate rows (PII, scores, resumes, interview tokens)
+        # or candidate-derived metrics to a user without pipeline access.
+        rows = []
+        metrics = {}
+        for drive in drives:
+            drive["candidate_count"] = 0
+
     return {
         "company": company_info,
         "job": asdict(stored_job) if stored_job else None,
@@ -1987,6 +2164,7 @@ def _actual_interview_seconds(started_at, ended_at) -> int:
 def _run_interview_evaluation(
     email: str, resume, interview_type: str, transcript: list[dict],
     current_job: JobDescription | None = None, company_id: str | None = None, job_id: str | None = None,
+    media: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score an interview transcript and persist the result + pipeline stage."""
     job = current_job or DEFAULT_JOB
@@ -2025,6 +2203,10 @@ def _run_interview_evaluation(
         "technical_interview" if interview_type == "technical" else "hr_interview"
     ) or {}
     recording = existing_interview.get("recording")
+    if media is None:
+        media = existing_interview.get("media")
+    attempts_used = existing_interview.get("attempts_used")
+    evaluation_ready = existing_interview.get("evaluation_ready")
 
     started_at = existing_interview.get("started_at")
     ended_at = datetime.now(timezone.utc)
@@ -2044,6 +2226,12 @@ def _run_interview_evaluation(
         interview["duration_seconds"] = actual_seconds
     if recording:
         interview["recording"] = recording
+    if media:
+        interview["media"] = media
+    if attempts_used is not None:
+        interview["attempts_used"] = attempts_used
+    if evaluation_ready is not None:
+        interview["evaluation_ready"] = evaluation_ready
 
     if interview_type == "technical":
         database.set_candidate_technical_interview(email, interview, company_id, job_id)

@@ -50,6 +50,7 @@ export function matchesCandidateFilter(candidate, filter) {
 export function Dashboard({
   workspace,
   candidates,
+  canViewPipeline = true,
   statusFilter,
   query,
   onStatusFilter,
@@ -73,15 +74,17 @@ export function Dashboard({
 
   return (
     <section className="content-stack">
-      <div className="metrics-grid">
-        <Metric icon={FileText} label="Uploaded" value={metrics.uploaded} />
-        <Metric icon={UserRoundCheck} label="Shortlisted" value={metrics.shortlisted} tone="green" />
-        <Metric icon={XCircle} label="Rejected" value={metrics.rejected} tone="red" />
-        <Metric icon={CircleGauge} label="Avg Score" value={`${metrics.averageScore}%`} tone="amber" />
-        <Metric icon={UsersRound} label="HR Interviewed" value={metrics.hrInterviewed || 0} tone="blue" />
-        <Metric icon={Monitor} label="Tech Interviewed" value={metrics.techInterviewed || 0} tone="purple" />
-        <Metric icon={CheckCircle2} label="Hired" value={metrics.hired || 0} tone="green" />
-      </div>
+      {canViewPipeline ? (
+        <div className="metrics-grid">
+          <Metric icon={FileText} label="Uploaded" value={metrics.uploaded} />
+          <Metric icon={UserRoundCheck} label="Shortlisted" value={metrics.shortlisted} tone="green" />
+          <Metric icon={XCircle} label="Rejected" value={metrics.rejected} tone="red" />
+          <Metric icon={CircleGauge} label="Avg Score" value={`${metrics.averageScore}%`} tone="amber" />
+          <Metric icon={UsersRound} label="HR Interviewed" value={metrics.hrInterviewed || 0} tone="blue" />
+          <Metric icon={Monitor} label="Tech Interviewed" value={metrics.techInterviewed || 0} tone="purple" />
+          <Metric icon={CheckCircle2} label="Hired" value={metrics.hired || 0} tone="green" />
+        </div>
+      ) : null}
 
       <section className="hero-band">
         <div className="hero-copy">
@@ -124,31 +127,37 @@ export function Dashboard({
         </div>
       </section>
 
-      <section className="table-section">
-        <div className="section-toolbar">
-          <div>
-            <h2>Candidate Shortlist</h2>
-            <span>{candidates.length} visible candidates</span>
-          </div>
-          <div className="filters">
-            <div className="search-box">
-              <Search size={17} />
-              <input value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search candidates" />
+      {canViewPipeline ? (
+        <section className="table-section">
+          <div className="section-toolbar">
+            <div>
+              <h2>Candidate Shortlist</h2>
+              <span>{candidates.length} visible candidates</span>
             </div>
-            <select
-              className="select-field"
-              value={statusFilter}
-              onChange={(event) => onStatusFilter(event.target.value)}
-              aria-label="Filter candidates by pipeline stage"
-            >
-              {CANDIDATE_FILTERS.map((status) => (
-                <option key={status} value={status}>{status}</option>
-              ))}
-            </select>
+            <div className="filters">
+              <div className="search-box">
+                <Search size={17} />
+                <input value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search candidates" />
+              </div>
+              <select
+                className="select-field"
+                value={statusFilter}
+                onChange={(event) => onStatusFilter(event.target.value)}
+                aria-label="Filter candidates by pipeline stage"
+              >
+                {CANDIDATE_FILTERS.map((status) => (
+                  <option key={status} value={status}>{status}</option>
+                ))}
+              </select>
+            </div>
           </div>
+          <CandidateTable candidates={candidates} onCandidate={onCandidate} onViewDetails={onViewDetails} />
+        </section>
+      ) : (
+        <div className="notice info">
+          You do not have permission to view the candidate pipeline. Contact your company administrator for access.
         </div>
-        <CandidateTable candidates={candidates} onCandidate={onCandidate} onViewDetails={onViewDetails} />
-      </section>
+      )}
     </section>
   );
 }

@@ -1521,6 +1521,29 @@ def mark_interview_started(
     )
 
 
+def set_candidate_interview_evaluation_ready(
+    email: str,
+    interview_type: str,
+    ready: bool | None,
+    media: dict | None = None,
+    company_id: str | None = None,
+    job_id: str | None = None,
+) -> None:
+    """Persist media evidence and whether the interview may be evaluated."""
+    field = _interview_field(interview_type)
+    update: dict = {}
+    if ready is not None:
+        update[f"{field}.evaluation_ready"] = bool(ready)
+    if media is not None:
+        update[f"{field}.media"] = media
+    if not update:
+        return
+    _candidates.update_one(
+        _candidate_filter(email, company_id, job_id),
+        {"$set": update},
+    )
+
+
 def mark_interview_abandoned(
     email: str,
     interview_type: str,

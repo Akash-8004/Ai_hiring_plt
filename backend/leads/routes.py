@@ -21,8 +21,8 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # ── Anti-abuse: lightweight server-side math CAPTCHA (no external service) ──
 _CAPTCHA_TTL_SECONDS = 600.0
 _captcha_challenges: dict[str, dict] = {}
-
-
+   
+   
 def _cleanup_captchas() -> None:
     now = time.time()
     for token, challenge in list(_captcha_challenges.items()):

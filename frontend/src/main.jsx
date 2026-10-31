@@ -402,6 +402,7 @@ function App() {
             <Dashboard
               workspace={workspace}
               candidates={candidates}
+              canViewPipeline={canViewPipeline}
               statusFilter={statusFilter}
               query={query}
               onStatusFilter={setStatusFilter}

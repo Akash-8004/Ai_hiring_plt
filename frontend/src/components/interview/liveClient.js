@@ -24,6 +24,10 @@ function wsUrl(token) {
   return `${base}/ws/interview/${encodeURIComponent(token)}`;
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function decodePcm(b64) {
   const raw = atob(b64);
   const bytes = new Uint8Array(raw.length);
@@ -51,6 +55,77 @@ export function createLiveClient({ token, initialStream = null, onReady, onTrans
   let playing = false;
 
   let framesSent = 0;
+
+  // ── Camera heartbeat (proof of live camera participation) ──
+  let videoHeartbeatTimer = null;
+  let heartbeatVideo = null;
+  let heartbeatCanvas = null;
+  let closedResolve = null;
+  const closedPromise = new Promise((resolve) => {
+    closedResolve = resolve;
+  });
+
+  function markClosed() {
+    if (closedResolve) {
+      closedResolve();
+      closedResolve = null;
+    }
+  }
+
+  function sendVideoFrame() {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !heartbeatVideo || !heartbeatCanvas) return;
+    if (heartbeatVideo.readyState < 2) return;
+    const context = heartbeatCanvas.getContext("2d");
+    if (!context) return;
+    try {
+      context.drawImage(heartbeatVideo, 0, 0, heartbeatCanvas.width, heartbeatCanvas.height);
+      const data = heartbeatCanvas.toDataURL("image/jpeg", 0.4).split(",")[1];
+      if (data) ws.send(JSON.stringify({ type: "video_frame", data }));
+    } catch (e) {
+      // A single unreadable frame should not stop the interview.
+    }
+  }
+
+  function startVideoHeartbeat() {
+    if (!cameraStream || videoHeartbeatTimer) return;
+    if (cameraStream.getVideoTracks().length === 0) return;
+
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.autoplay = true;
+    video.srcObject = cameraStream;
+    video.style.position = "fixed";
+    video.style.width = "1px";
+    video.style.height = "1px";
+    video.style.opacity = "0";
+    video.style.pointerEvents = "none";
+    document.body.appendChild(video);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 160;
+    canvas.height = 120;
+
+    heartbeatVideo = video;
+    heartbeatCanvas = canvas;
+    video.play().catch(() => {});
+    videoHeartbeatTimer = setInterval(sendVideoFrame, 5000);
+    sendVideoFrame();
+  }
+
+  function stopVideoHeartbeat() {
+    if (videoHeartbeatTimer) {
+      clearInterval(videoHeartbeatTimer);
+      videoHeartbeatTimer = null;
+    }
+    if (heartbeatVideo) {
+      try { heartbeatVideo.pause(); } catch (e) { /* already paused */ }
+      heartbeatVideo.srcObject = null;
+      heartbeatVideo.remove();
+      heartbeatVideo = null;
+    }
+    heartbeatCanvas = null;
+  }
 
   // ── Recording state ──
   let recorder = null;
@@ -395,6 +470,7 @@ export function createLiveClient({ token, initialStream = null, onReady, onTrans
           onError && onError(msg.message);
           break;
         case "closed":
+          markClosed();
           onClosed && onClosed();
           break;
         default:
@@ -402,6 +478,7 @@ export function createLiveClient({ token, initialStream = null, onReady, onTrans
       }
     };
     ws.onclose = () => {
+      markClosed();
       onClosed && onClosed();
     };
   }
@@ -412,6 +489,7 @@ export function createLiveClient({ token, initialStream = null, onReady, onTrans
     async connect() {
       await startCapture();
       await openSocket();
+      startVideoHeartbeat();
     },
     getCameraStream() {
       return cameraStream;
@@ -437,11 +515,19 @@ export function createLiveClient({ token, initialStream = null, onReady, onTrans
     startRecording,
     stopRecording,
     async close() {
+      if (closed) return;
       closed = true;
       clearPlayback();
       if (recorder && recorder.state !== "inactive") {
         try { recorder.stop(); } catch (e) { /* ignore */ }
       }
+      if (ws) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "end" }));
+        }
+        await Promise.race([closedPromise, delay(5000)]);
+      }
+      stopVideoHeartbeat();
       if (captureNode) captureNode.disconnect();
       if (sourceNode) sourceNode.disconnect();
       if (aiProcessor) { try { aiProcessor.disconnect(); } catch (e) {} }
@@ -453,9 +539,10 @@ export function createLiveClient({ token, initialStream = null, onReady, onTrans
           await audioContext.close();
         } catch (e) { /* already closed */ }
       }
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "end" }));
-        ws.close();
+      try {
+        if (ws) ws.close();
+      } catch (e) {
+        // already closed
       }
     },
   };

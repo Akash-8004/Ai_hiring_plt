@@ -284,6 +284,17 @@ async def require_authenticated(
     return user
 
 
+def has_permission(user: dict | None, *required: str) -> bool:
+    """Return True when ``user`` holds every required permission."""
+    if not user:
+        return False
+    role = user.get("role")
+    perms = user.get("permissions", []) or []
+    if role in ("super_admin", "company_admin") or "*" in perms:
+        return True
+    return all(p in perms for p in required)
+
+
 def require_permission(*required: str):
     """Dependency factory enforcing granular sub-user permissions.
 
@@ -294,12 +305,7 @@ def require_permission(*required: str):
     Usage:  ``user: dict = Depends(require_permission("manage_resumes"))``
     """
     async def _checker(user: dict = Depends(get_current_user)) -> dict:
-        role = user.get("role")
-        perms = user.get("permissions", []) or []
-        if role in ("super_admin", "company_admin") or "*" in perms:
-            return user
-        missing = [p for p in required if p not in perms]
-        if missing:
+        if not has_permission(user, *required):
             raise _forbidden(
                 PERMISSION_DENIED,
                 "You do not have permission to perform this action.",
