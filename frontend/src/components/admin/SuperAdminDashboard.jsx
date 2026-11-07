@@ -535,7 +535,7 @@ export function SuperAdminDashboard() {
             <Sparkles size={20} className="icon-pulse text-primary" />
           </div>
           <div>
-            <h1 className="brand-title">AI Hiring Platform</h1>
+            <h1 className="brand-title">Silveri Hire</h1>
             <span className="badge role-badge-super">Super Admin Control Center</span>
           </div>
         </div>

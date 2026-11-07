@@ -7,7 +7,7 @@ import "./marketing.css";
 const SECTIONS = [
   {
     title: "1. Information We Collect",
-    body: "HireAI collects information you provide directly to the platform, including company account details, team member information, candidate resumes, interview responses, recordings, and usage data. We also collect limited technical data such as device type and browser information to operate and secure the service.",
+    body: "Silveri Hire collects information you provide directly to the platform, including company account details, team member information, candidate resumes, interview responses, recordings, and usage data. We also collect limited technical data such as device type and browser information to operate and secure the service.",
   },
   {
     title: "2. How We Use Your Information",
@@ -53,7 +53,7 @@ export function PrivacyPolicyPage() {
         <h1>Privacy Policy</h1>
         <p>Last updated: September 2026</p>
         <p>
-          HireAI Platform Inc - Silveri Consulting Services Pvt Ltd is committed to protecting your privacy and the confidentiality of your hiring data.
+          Silveri Hire Platform Inc - Silveri Consulting Services Pvt Ltd is committed to protecting your privacy and the confidentiality of your hiring data.
         </p>
       </section>
 

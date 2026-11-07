@@ -145,7 +145,7 @@ export function BookDemoPage() {
           </span>
           <h1>Experience the future of hiring in real time</h1>
           <p className="lead">
-            Book a 30-minute interactive session with our product experts to see how HireAI can eliminate screening bottlenecks for your team.
+            Book a 30-minute interactive session with our product experts to see how Silveri Hire can eliminate screening bottlenecks for your team.
           </p>
 
           <div className="mkt-value-list">
@@ -165,7 +165,7 @@ export function BookDemoPage() {
               </div>
               <div className="mkt-value-text">
                 <h4>ROI &amp; Time-Savings Calculation</h4>
-                <p>Discover how much recruiter and engineering bandwidth HireAI saves each week.</p>
+                <p>Discover how much recruiter and engineering bandwidth Silveri Hire saves each week.</p>
               </div>
             </div>
 
@@ -187,7 +187,7 @@ export function BookDemoPage() {
               ))}
             </div>
             <p style={{ color: "#cbd5e1", fontSize: "0.9rem", fontStyle: "italic", margin: "0 0 0.75rem" }}>
-              &ldquo;The demo showed us exactly how HireAI would cut our technical phone screen load from 12 hours a week to zero.&rdquo;
+              &ldquo;The demo showed us exactly how Silveri Hire would cut our technical phone screen load from 12 hours a week to zero.&rdquo;
             </p>
             <div style={{ fontSize: "0.82rem", fontWeight: 700, color: "#ffffff" }}>
               Director of Engineering &middot; High-growth SaaS

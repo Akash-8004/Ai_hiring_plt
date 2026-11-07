@@ -115,7 +115,7 @@ export function FeaturesPage() {
           Engineered for high-integrity, high-velocity hiring
         </h1>
         <p>
-          Discover every enterprise capability built into HireAI — from multi-modal AI screening to autonomous voice interviews.
+          Discover every enterprise capability built into Silveri Hire — from multi-modal AI screening to autonomous voice interviews.
         </p>
       </section>
 

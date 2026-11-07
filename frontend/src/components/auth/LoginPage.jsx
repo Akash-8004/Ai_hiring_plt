@@ -41,7 +41,7 @@ export function LoginPage() {
           <div className="login-logo-badge">
             <Sparkles size={24} className="icon-pulse" />
           </div>
-          <h1 className="login-title">HireAI</h1>
+          <h1 className="login-title">Silveri Hire</h1>
           <p className="login-subtitle">
             Enterprise hiring, confidently. AI screening &amp; voice interviews.
           </p>

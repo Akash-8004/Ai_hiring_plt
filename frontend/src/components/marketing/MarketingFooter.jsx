@@ -13,7 +13,7 @@ export function MarketingFooter() {
             <div className="mkt-nav-brand-icon">
               <Sparkles size={20} color="#ffffff" />
             </div>
-            <span>HireAI</span>
+            <span>Silveri Hire</span>
           </Link>
           <p>
             Autonomous technical and HR interview platform powered by live AI. Intelligent resume screening, real-time speech evaluation, and full pipeline management.
@@ -57,7 +57,7 @@ export function MarketingFooter() {
 
       <div className="mkt-footer-bottom">
         <div>
-          &copy; {new Date().getFullYear()} HireAI Platform Inc - Silveri Consulting Services Pvt Ltd. All rights reserved.
+          &copy; {new Date().getFullYear()} Silveri Hire Platform Inc - Silveri Consulting Services Pvt Ltd. All rights reserved.
         </div>
 
         <div className="mkt-footer-legal">

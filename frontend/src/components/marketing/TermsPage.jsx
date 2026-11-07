@@ -7,11 +7,11 @@ import "./marketing.css";
 const SECTIONS = [
   {
     title: "1. Acceptance of Terms",
-    body: "By accessing or using the HireAI platform, you agree to be bound by these Terms & Conditions and all applicable laws. If you do not agree with any part of these terms, you must not use the platform.",
+    body: "By accessing or using the Silveri Hire platform, you agree to be bound by these Terms & Conditions and all applicable laws. If you do not agree with any part of these terms, you must not use the platform.",
   },
   {
     title: "2. Description of Service",
-    body: "HireAI provides an AI-powered hiring platform that includes resume screening, live voice and video AI interviews, hiring pipeline management, proctoring, and related services, delivered as a subscription-based SaaS offering.",
+    body: "Silveri Hire provides an AI-powered hiring platform that includes resume screening, live voice and video AI interviews, hiring pipeline management, proctoring, and related services, delivered as a subscription-based SaaS offering.",
   },
   {
     title: "3. Accounts & User Responsibilities",
@@ -27,7 +27,7 @@ const SECTIONS = [
   },
   {
     title: "6. Intellectual Property",
-    body: "The platform, including its software, design, branding, and AI models, is owned by HireAI Platform Inc and its licensors. No rights are granted beyond the limited license to use the service for your business purposes.",
+    body: "The platform, including its software, design, branding, and AI models, is owned by Silveri Hire Platform Inc and its licensors. No rights are granted beyond the limited license to use the service for your business purposes.",
   },
   {
     title: "7. Candidate Data & Compliance",
@@ -35,7 +35,7 @@ const SECTIONS = [
   },
   {
     title: "8. Limitation of Liability",
-    body: "To the maximum extent permitted by law, HireAI shall not be liable for indirect, incidental, or consequential damages arising from your use of the platform. Our total liability is limited to the amounts paid by you in the twelve months preceding the claim.",
+    body: "To the maximum extent permitted by law, Silveri Hire shall not be liable for indirect, incidental, or consequential damages arising from your use of the platform. Our total liability is limited to the amounts paid by you in the twelve months preceding the claim.",
   },
   {
     title: "9. Termination",
@@ -47,7 +47,7 @@ const SECTIONS = [
   },
   {
     title: "11. Governing Law",
-    body: "These terms are governed by the applicable laws of the jurisdiction in which HireAI Platform Inc operates, without regard to conflict-of-law principles.",
+    body: "These terms are governed by the applicable laws of the jurisdiction in which Silveri Hire Platform Inc operates, without regard to conflict-of-law principles.",
   },
   {
     title: "12. Contact Us",
@@ -65,7 +65,7 @@ export function TermsPage() {
         <h1>Terms &amp; Conditions</h1>
         <p>Last updated: September 2026</p>
         <p>
-          These terms govern your access to and use of the HireAI platform, operated by HireAI Platform Inc - Silveri Consulting Services Pvt Ltd.
+          These terms govern your access to and use of the Silveri Hire platform, operated by Silveri Hire Platform Inc - Silveri Consulting Services Pvt Ltd.
         </p>
       </section>
 

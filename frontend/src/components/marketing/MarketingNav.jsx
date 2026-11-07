@@ -130,8 +130,7 @@ export function MarketingNav() {
           <div className="mkt-nav-brand-icon">
             <Sparkles size={20} color="#ffffff" />
           </div>
-          <span>HireAI</span>
-          <span className="mkt-nav-brand-badge">SaaS</span>
+          <span>Silveri Hire</span>
         </Link>
 
         <div className="mkt-nav-center">
@@ -139,7 +138,7 @@ export function MarketingNav() {
             className={`mkt-nav-link ${location.pathname === "/" && location.hash === "#why" ? "active" : ""}`}
             onClick={() => goAnchor("why")}
           >
-            Why HireAI?
+            Why Silveri Hire?
           </button>
 
           {/* Products Mega Dropdown */}
@@ -233,7 +232,7 @@ export function MarketingNav() {
           <div className="mkt-mobile-nav-group">
             <span className="mkt-mobile-group-title">Navigation</span>
             <button className="mkt-mobile-link" onClick={() => goAnchor("why")}>
-              Why HireAI?
+              Why Silveri Hire?
             </button>
             <Link to="/features" className="mkt-mobile-link" onClick={() => setMobileOpen(false)}>
               All Features & Capabilities

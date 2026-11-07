@@ -54,7 +54,7 @@ const TAB_PRODUCTS = [
     label: "Resume Screening",
     icon: FileSearch,
     title: "Zero-bias, lightning-fast resume evaluation",
-    desc: "Upload hundreds of resumes in batch. HireAI extracts skills, work experience, and educational background, scoring candidates against your drive's exact benchmark.",
+    desc: "Upload hundreds of resumes in batch. Silveri Hire extracts skills, work experience, and educational background, scoring candidates against your drive's exact benchmark.",
     bullets: [
       "Multi-format parsing: PDF, DOCX, TXT",
       "Configurable match thresholds (e.g. 75%+ for automatic invite)",
@@ -82,7 +82,7 @@ const TAB_PRODUCTS = [
     ],
     preview: {
       type: "voice",
-      interviewer: "HireAI Technical Agent",
+      interviewer: "Silveri Hire Technical Agent",
       round: "System Design & Concurrency",
       status: "Live Recording",
       question: "How would you design a distributed rate limiter for a high-traffic API gateway?",
@@ -179,7 +179,7 @@ const SOLUTIONS = [
 
 const TESTIMONIALS = [
   {
-    quote: "HireAI slashed our engineering screening time by 75%. Our senior engineers now only spend time on final culture interviews with top-tier candidates.",
+    quote: "Silveri Hire slashed our engineering screening time by 75%. Our senior engineers now only spend time on final culture interviews with top-tier candidates.",
     author: "Alex Rivera",
     role: "VP of Engineering, CloudScale",
     avatar: "AR",
@@ -204,11 +204,11 @@ const TESTIMONIALS = [
 const FAQS = [
   {
     q: "How does the live voice AI interview work?",
-    a: "Candidates open a secure browser link with no extra downloads needed. HireAI connects their microphone and camera to a real-time AI interviewer that asks structured technical and behavioral questions, reacts naturally to responses, records and transcribes the session, and generates a structured scorecard.",
+    a: "Candidates open a secure browser link with no extra downloads needed. Silveri Hire connects their microphone and camera to a real-time AI interviewer that asks structured technical and behavioral questions, reacts naturally to responses, records and transcribes the session, and generates a structured scorecard.",
   },
   {
     q: "How does AI resume screening evaluate candidates?",
-    a: "When resumes (PDF, DOCX, TXT) are uploaded, HireAI extracts candidate skills, experience duration, and project history. It scores each resume against the specific job drive requirements and automatically categorizes applicants into shortlisted or rejected based on your configured threshold.",
+    a: "When resumes (PDF, DOCX, TXT) are uploaded, Silveri Hire extracts candidate skills, experience duration, and project history. It scores each resume against the specific job drive requirements and automatically categorizes applicants into shortlisted or rejected based on your configured threshold.",
   },
   {
     q: "What anti-cheating and proctoring measures are in place?",
@@ -220,7 +220,7 @@ const FAQS = [
   },
   {
     q: "How is company data isolated and secured?",
-    a: "HireAI uses a multi-tenant database design where all resumes, candidate evaluations, and job drives are strictly partitioned by company_id. Platform access is guarded by JWT authentication and granular role-based permissions.",
+    a: "Silveri Hire uses a multi-tenant database design where all resumes, candidate evaluations, and job drives are strictly partitioned by company_id. Platform access is guarded by JWT authentication and granular role-based permissions.",
   },
 ];
 
@@ -241,7 +241,7 @@ export function LandingPage() {
         <div>
           <div className="mkt-hero-badge">
             <span className="mkt-live-dot" />
-            <span>Next-Gen AI Technical &amp; HR Hiring Platform</span>
+            <span>Next-Gen AI Hiring Platform</span>
           </div>
 
           <h1>
@@ -249,7 +249,7 @@ export function LandingPage() {
           </h1>
 
           <p className="mkt-hero-sub">
-            HireAI unites intelligent resume screening, live voice AI interviews, and an end-to-end hiring pipeline — empowering your team to hire top talent 3x faster with zero bias.
+            Silveri Hire unites intelligent resume screening, live voice AI interviews, and an end-to-end hiring pipeline — empowering your team to hire top talent 3x faster with zero bias.
           </p>
 
           <div className="mkt-hero-cta">
@@ -377,13 +377,13 @@ export function LandingPage() {
         </div>
       </div>
 
-      {/* ── Interactive Product Tabs ("What HireAI does") ────────────────── */}
+      {/* ── Interactive Product Tabs ("What Silveri Hire does") ────────────────── */}
       <section id="why" className="mkt-section">
         <div className="mkt-section-header">
           <span className="mkt-eyebrow">
             <Sparkles size={13} /> Complete Hiring Suite
           </span>
-          <h2>What HireAI does</h2>
+          <h2>What Silveri Hire does</h2>
           <p>
             An end-to-end hiring operating system built to automate screening, conduct technical interviews, and streamline team decisions.
           </p>
@@ -588,7 +588,7 @@ export function LandingPage() {
           </span>
           <h2>Tailored for your hiring scale</h2>
           <p>
-            Whether you are an early-stage startup or a multi-department enterprise, HireAI scales with you.
+            Whether you are an early-stage startup or a multi-department enterprise, Silveri Hire scales with you.
           </p>
         </div>
 
@@ -612,7 +612,7 @@ export function LandingPage() {
             <Star size={13} /> Customer Reviews
           </span>
           <h2>Trusted by high-velocity teams</h2>
-          <p>See how companies transform their hiring outcomes with HireAI.</p>
+          <p>See how companies transform their hiring outcomes with Silveri Hire.</p>
         </div>
 
         <div className="mkt-testimonials">
@@ -646,7 +646,7 @@ export function LandingPage() {
             <HelpCircle size={13} /> Got Questions?
           </span>
           <h2>Frequently Asked Questions</h2>
-          <p>Everything you need to know about the HireAI platform and integrations.</p>
+          <p>Everything you need to know about the Silveri Hire platform and integrations.</p>
         </div>
 
         <div className="mkt-faq-grid">

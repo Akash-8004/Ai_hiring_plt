@@ -1,4 +1,4 @@
-# AI Hiring Platform
+# Silveri Hire - AI Hiring Platform
 
 ## Current scope
 

@@ -63,7 +63,7 @@ export function ResetPasswordPage() {
             <div className="login-logo-badge">
               <Sparkles size={24} className="icon-pulse" />
             </div>
-            <h1 className="login-title">HireAI</h1>
+            <h1 className="login-title">Silveri Hire</h1>
             <p className="login-subtitle">Invalid reset link</p>
           </div>
           <div className="login-alert error">
@@ -92,7 +92,7 @@ export function ResetPasswordPage() {
           <div className="login-logo-badge">
             <Sparkles size={24} className="icon-pulse" />
           </div>
-          <h1 className="login-title">HireAI</h1>
+          <h1 className="login-title">Silveri Hire</h1>
           <p className="login-subtitle">Set a new password</p>
         </div>
 

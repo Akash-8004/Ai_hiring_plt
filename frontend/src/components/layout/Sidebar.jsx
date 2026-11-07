@@ -83,7 +83,7 @@ export function Sidebar({
       <div className="brand-lockup">
         <div className="brand-mark"><Sparkles size={19} /></div>
         <div className="brand-titles">
-          <strong>AI Hiring SaaS</strong>
+          <strong>Silveri Hire</strong>
           <span>Enterprise Portal</span>
         </div>
         <button
