@@ -1,198 +1,132 @@
-# Silveri Hire - AI Hiring Platform
+# Silveri Hire (HireAI)
 
-## Current scope
+An AI-powered, multi-tenant hiring platform that automates resume screening, conducts live voice interviews using Google Gemini AI, and manages the full recruitment pipeline from intake to hire.
 
-- **Multi-tenant SaaS authentication** — Super Admin → Company Admin → sub-users (HR / Interviewers), JWT sessions
-- **Self-service team management** — company admins add their own staff up to a plan seat cap (no super-admin approval)
-- **Plan tiers** — Starter (5 users / 3 jobs), Growth (15 / 10), Enterprise (50 / 50)
-- **Tenant isolation** — every company's candidates, jobs, and users are scoped by `company_id`
-- **Super Admin control center** — onboard companies, manage users, platform KPIs, full audit trail
-- **Audit log** — every auth / user / company action recorded, filterable per company
-- Modern React SaaS dashboard
-- Python FastAPI backend
-- Company/HR workspace
-- Job description setup by HR
-- Resume upload placeholder for TXT, PDF, and DOCX
-- AI shortlisting placeholder with scoring dimensions
-- Configurable shortlist threshold
-- HR dashboard showing shortlisted and rejected candidates
-- Export-ready candidate table
-- Invite shortlisted candidates to AI technical/HR interviews via link
-- **Live voice AI interview** — Gemini Live via a FastAPI WebSocket relay (browser mic/audio ↔ server-side Gemini Live session)
-- Auto-evaluation when the AI interviewer ends the conversation; transcript persisted to MongoDB as it happens
+## Technology Stack
 
-## Run Locally
+| Layer | Technology |
+|---|---|
+| Backend | Python, FastAPI, Uvicorn |
+| Frontend | React 19, Vite 6, react-router-dom 7 |
+| Database | MongoDB (pymongo) |
+| AI | Google Gemini API (REST + Live voice) |
+| Email | Brevo API / SMTP |
+| Storage | Cloudflare R2 (interview recordings) |
+| Auth | JWT (HS256) + bcrypt |
+| Deployment | Docker, Render.com |
 
-Backend:
+## Main Features
 
-```powershell
-python -m uvicorn backend.main:app --reload --port 8000
-```
+- **Multi-Tenant SaaS** — Company-level data isolation with plan-based seat and credit limits.
+- **AI Resume Parsing** — Extracts structured candidate data from PDF, DOCX, TXT, and scanned images (Gemini OCR).
+- **AI Resume Screening** — Scores candidates against job requirements on 5 weighted dimensions.
+- **Live AI Voice Interviews** — Real-time conversational interviews via Gemini Live API with HR and Technical round personas.
+- **Custom Coding Questions** — Upload question banks for the technical round; candidates type answers in-interview.
+- **Browser Proctoring** — Fullscreen enforcement with 2-strike tab-switching detection.
+- **Interview Recording** — Full video + audio recording uploaded to Cloudflare R2.
+- **Hiring Pipeline** — Multi-stage pipeline (Screening → HR → Technical) with admin override capability.
+- **Credit System** — Cumulative 10-minute block billing with atomic deductions.
+- **Email Notifications** — Automated invitation, credential, and hire notification emails via Brevo.
+- **Audit Logging** — Every mutation tracked with actor, IP, and metadata.
+- **Team Management** — Granular permission system for sub-users (6 permission types).
+- **Lead Capture** — Public demo request form with server-side CAPTCHA and admin CRM panel.
 
-Frontend:
+## Quick Setup
 
-```powershell
-cd frontend
-cmd /c npm install
-cmd /c npm run dev
-```
+### Prerequisites
 
-Open:
+- Python 3.11+
+- Node.js 18+
+- MongoDB
+- Google Gemini API key
 
-```text
-http://localhost:5173
-```
+### Installation
 
-If you move the project to another machine:
+```bash
+# Clone and configure
+git clone <repository-url>
+cd AI_Hiring
+cp .env.example .env
+# Edit .env with your credentials
 
-```powershell
+# Install dependencies
 pip install -r requirements.txt
-cd frontend
-cmd /c npm install
+cd frontend && npm install && cd ..
+
+# Build frontend and start
+cd frontend && npm run build && cd ..
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
-## Authentication & Multi-Tenancy
+The application runs at `http://localhost:8000`.
 
-The platform is a multi-tenant SaaS with three roles:
+### Docker
 
-- **Super Admin** — platform owner. Onboards client companies, manages all users, views platform KPIs and the full audit trail. Seeded automatically on first backend startup.
-- **Company Admin** — created when a company is onboarded. Manages their own team and hiring pipeline, and adds sub-users directly up to their plan's seat cap — with **no** super-admin approval.
-- **Sub-user (HR / Interviewer)** — scoped permissions (conduct interviews, view pipeline, manage resumes).
-
-On first startup the backend seeds a Super Admin from these `.env` variables (defaults shown):
-
-```env
-SUPER_ADMIN_EMAIL=admin@aihiring.com
-SUPER_ADMIN_PASSWORD=change_me
-JWT_SECRET_KEY=replace_with_a_long_random_string
-JWT_ALGORITHM=HS256
-JWT_ACCESS_TOKEN_EXPIRE_MINUTES=30
-JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
+```bash
+docker build -t hireai .
+docker run -p 8000:8000 --env-file .env hireai
 ```
 
-Log in at `http://localhost:5173` as the Super Admin, onboard a company (which creates its Company Admin), then hand those credentials to the company. All candidate, job, and user data is isolated per company via `company_id`.
+### Environment Variables
 
-> Set a strong `JWT_SECRET_KEY` and `SUPER_ADMIN_PASSWORD` in every deployment — the code defaults are placeholders for local dev only.
+Copy `.env.example` and configure at minimum:
 
-## Gemini Resume Screening
+| Variable | Purpose |
+|---|---|
+| `GEMINI_API_KEY` | Google Gemini API key |
+| `MONGODB_URI` | MongoDB connection string |
+| `JWT_SECRET` | JWT signing secret |
+| `SUPER_ADMIN_EMAIL` | Platform admin email |
+| `SUPER_ADMIN_PASSWORD` | Platform admin password |
+| `FRONTEND_URL` | Public frontend URL (for email links) |
 
-The current ranker uses Gemini first when these variables are available in `.env`:
-
-```env
-AI_PROVIDER=gemini
-GEMINI_MODEL=gemini-2.0-flash
-GEMINI_API_KEY=your_key_here
-```
-
-Gemini returns a structured screening result with:
-
-- total score
-- shortlist recommendation
-- matched skills
-- missing skills
-- dimension breakdown
-- HR-facing summary
-
-If Gemini is unavailable, the backend falls back to a deterministic local scoring technique so the dashboard still works:
-
-- skill match
-- keyword match
-- experience match
-- education signal
-- semantic placeholder score
-
-The file `backend/services/ai_ranker.py` contains `AIRankingService`.
-
-The React app calls FastAPI endpoints under `backend/main.py` (workspace/interviews) plus the auth and admin routers:
-
-Auth (`/api/auth`):
-
-- `POST /login` · `POST /refresh` · `POST /logout` · `GET /me` · `POST /change-password`
-
-Super Admin (`/api/admin`):
-
-- `GET /stats`
-- `GET|POST /companies` · `GET|PUT /companies/{id}` · `POST /companies/{id}/suspend|activate`
-- `GET /companies/{id}/users` · `GET /companies/{id}/activity`
-- `GET /users` · `POST /users/{id}/suspend|activate` · `GET /audit-log`
-
-Company Admin (`/api/company`):
-
-- `GET|POST /team` · `POST /team/{id}/suspend|activate`
-
-Workspace & interviews:
-
-- `GET /api/workspace`
-- `PUT /api/job`
-- `POST /api/resumes/upload`
-- `POST /api/resumes/manual`
-- `POST /api/resumes/sample`
-- `DELETE /api/resumes`
-- `POST /api/candidates/{email}/invite`
-- `GET /api/interview/session/{token}`
-- `POST /api/interview/evaluate`
-- `WS /ws/interview/{token}` (Gemini Live relay)
-
-## Live Voice Interview (Gemini Live)
-
-The conversation uses the **Gemini Live API** over a server-side WebSocket relay so
-the API key never reaches the browser:
-
-```
-Browser mic ──(AudioWorklet → 16kHz PCM)──▶ FastAPI /ws/interview/{token} ──▶ Gemini Live
-Browser speakers ◀──(PCM audio + transcript)── FastAPI ◀── audio + STT/TTS ──┘
-```
-
-- `backend/live/relay.py` — `GeminiLiveRelay` wraps `google-genai`'s `client.aio.live.connect()`.
-- Frontend mic capture/playback lives in `frontend/src/components/interview/liveClient.js`.
-- Transcription is enabled in both directions (`input_audio_transcription` / `output_audio_transcription`);
-  each finished turn is appended to the candidate document in Mongo, so nothing is lost if the tab closes.
-- When the interviewer says the closing phrase ("The interview is now complete."), the backend
-  automatically evaluates the transcript and closes the session. The candidate can also click
-  "End Interview" to evaluate early.
-
-Configure in `.env`:
-
-```env
-GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview
-GEMINI_LIVE_VOICE=Puck
-```
+See `.env.example` for the complete list of configuration options.
 
 ## Project Structure
 
-```text
-backend/
-  main.py                 # FastAPI app: routes + live WebSocket relay wiring
-  config.py               # loads .env once for every module
-  auth/                   # JWT security, login/refresh routes, super-admin seed
-  admin/                  # super-admin + company-admin routes (companies, team, audit)
-  core/                   # shared data models + seed data
-  services/               # business logic (ranking, parsing, interviews, prompts)
-  storage/                # MongoDB persistence layer (tenant-scoped by company_id)
-  live/                   # Gemini Live relay (server-side API key)
-frontend/
-  src/
-    main.jsx              # app entry; routes views and the interview page
-    components/
-      auth/               # AuthProvider + LoginPage
-      admin/              # SuperAdminDashboard (KPIs, companies, users, audit log)
-      team/               # company team management + add-member modal
-      layout/             # Sidebar, Topbar
-      dashboard/          # Dashboard + candidate table
-      job/                # Job setup editor
-      resumes/            # Resume intake
-      pipeline/           # Pipeline + candidate rows
-      candidate/          # Candidate detail panel
-      settings/           # Settings view
-      interview/          # Live voice interview UI + WebSocket client
-      common/             # shared UI primitives (Field, Metric, StatusBadge, ...)
+```
+AI_Hiring/
+├── backend/
+│   ├── main.py              # FastAPI app entry point
+│   ├── auth/                # Authentication & authorization
+│   ├── admin/               # Super Admin & Company Admin routes
+│   ├── core/                # Data models & sanitization
+│   ├── live/                # Gemini Live API relay
+│   ├── leads/               # Public lead capture
+│   ├── services/            # AI ranking, parsing, email, OCR
+│   │   ├── Technical/       # Technical interview prompts & evaluator
+│   │   └── HR_Round/        # HR interview prompts & evaluator
+│   └── storage/             # MongoDB persistence layer
+├── frontend/
+│   └── src/
+│       ├── main.jsx         # App entry & routing
+│       ├── components/      # React components (14 modules)
+│       ├── hooks/           # Custom hooks (auth, proctoring, upload)
+│       └── utils/           # API client, CSV, pipeline status
+├── docs/
+│   └── HANDOVER.md          # Full technical handover documentation
+├── tests/                   # Integration & unit tests
+├── Dockerfile               # Multi-stage Docker build
+├── render.yaml              # Render.com deployment config
+├── requirements.txt         # Python dependencies
+└── .env.example             # Environment variable template
 ```
 
-## Suggested Next Phases
+## Documentation
 
-1. Replace in-memory state with PostgreSQL tables from the TDD.
-2. Add real PDF/DOCX extraction libraries for production parsing.
-3. Move ranking to FastAPI background jobs.
-4. ✅ Company authentication & tenant isolation — **done** (multi-tenant auth, roles, plan seat limits, audit log).
-5. Add session resumption for Live sessions longer than the ~10 minute connection limit.
-6. Self-service plan upgrades / billing (today the Super Admin adjusts a company's plan limits).
+For complete technical documentation, architecture details, feature explanations, database schema, API reference, and deployment instructions, see:
+
+📄 **[docs/HANDOVER.md](docs/HANDOVER.md)**
+
+## User Roles
+
+| Role | Description |
+|---|---|
+| **Super Admin** | Platform owner. Manages companies, plans, credits, and leads. |
+| **Company Admin** | Organization owner. Manages hiring drives, team, and pipeline. |
+| **Sub-User** | HR/Recruiter with granular permissions assigned by Company Admin. |
+| **Candidate** | Accesses interviews via tokenized links. No login required. |
+
+## License
+
+Proprietary. All rights reserved.
