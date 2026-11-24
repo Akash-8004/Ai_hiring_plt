@@ -1,4 +1,4 @@
-# Silveri Hire (HireAI) — Technical Handover Documentation
+# Silveri Hire — Technical Documentation
 
 > **Version**: 1.0
 > **Last Updated**: November 2026
@@ -314,8 +314,7 @@ At any point, a Company Admin can **override** a failed stage and manually advan
 **Behind the Scenes:**
 
 1. The `AIRankingService` (`backend/services/ai_ranker.py`) sends the parsed resume and job description to Gemini.
-2. Gemini scores on 5 weighted dimensions:
-   | Dimension                     | Weight |
+2. Gemini scores on 5 weighted dimensions:| Dimension                     | Weight |
    | ----------------------------- | ------ |
    | Skills Match                  | 30%    |
    | Experience Alignment          | 25%    |
