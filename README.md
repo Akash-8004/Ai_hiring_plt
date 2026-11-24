@@ -1,19 +1,19 @@
-# Silveri Hire (HireAI)
+# Silveri Hire - AI Hiring Platform
 
 An AI-powered, multi-tenant hiring platform that automates resume screening, conducts live voice interviews using Google Gemini AI, and manages the full recruitment pipeline from intake to hire.
 
 ## Technology Stack
 
-| Layer | Technology |
-|---|---|
-| Backend | Python, FastAPI, Uvicorn |
-| Frontend | React 19, Vite 6, react-router-dom 7 |
-| Database | MongoDB (pymongo) |
-| AI | Google Gemini API (REST + Live voice) |
-| Email | Brevo API / SMTP |
-| Storage | Cloudflare R2 (interview recordings) |
-| Auth | JWT (HS256) + bcrypt |
-| Deployment | Docker, Render.com |
+| Layer      | Technology                            |
+| ---------- | ------------------------------------- |
+| Backend    | Python, FastAPI, Uvicorn              |
+| Frontend   | React 19, Vite 6, react-router-dom 7  |
+| Database   | MongoDB (pymongo)                     |
+| AI         | Google Gemini API (REST + Live voice) |
+| Email      | Brevo API / SMTP                      |
+| Storage    | Cloudflare R2 (interview recordings)  |
+| Auth       | JWT (HS256) + bcrypt                  |
+| Deployment | Docker, Render.com                    |
 
 ## Main Features
 
@@ -71,14 +71,14 @@ docker run -p 8000:8000 --env-file .env hireai
 
 Copy `.env.example` and configure at minimum:
 
-| Variable | Purpose |
-|---|---|
-| `GEMINI_API_KEY` | Google Gemini API key |
-| `MONGODB_URI` | MongoDB connection string |
-| `JWT_SECRET` | JWT signing secret |
-| `SUPER_ADMIN_EMAIL` | Platform admin email |
-| `SUPER_ADMIN_PASSWORD` | Platform admin password |
-| `FRONTEND_URL` | Public frontend URL (for email links) |
+| Variable                 | Purpose                               |
+| ------------------------ | ------------------------------------- |
+| `GEMINI_API_KEY`       | Google Gemini API key                 |
+| `MONGODB_URI`          | MongoDB connection string             |
+| `JWT_SECRET`           | JWT signing secret                    |
+| `SUPER_ADMIN_EMAIL`    | Platform admin email                  |
+| `SUPER_ADMIN_PASSWORD` | Platform admin password               |
+| `FRONTEND_URL`         | Public frontend URL (for email links) |
 
 See `.env.example` for the complete list of configuration options.
 
@@ -120,12 +120,12 @@ For complete technical documentation, architecture details, feature explanations
 
 ## User Roles
 
-| Role | Description |
-|---|---|
-| **Super Admin** | Platform owner. Manages companies, plans, credits, and leads. |
-| **Company Admin** | Organization owner. Manages hiring drives, team, and pipeline. |
-| **Sub-User** | HR/Recruiter with granular permissions assigned by Company Admin. |
-| **Candidate** | Accesses interviews via tokenized links. No login required. |
+| Role                    | Description                                                       |
+| ----------------------- | ----------------------------------------------------------------- |
+| **Super Admin**   | Platform owner. Manages companies, plans, credits, and leads.     |
+| **Company Admin** | Organization owner. Manages hiring drives, team, and pipeline.    |
+| **Sub-User**      | HR/Recruiter with granular permissions assigned by Company Admin. |
+| **Candidate**     | Accesses interviews via tokenized links. No login required.       |
 
 ## License
 
